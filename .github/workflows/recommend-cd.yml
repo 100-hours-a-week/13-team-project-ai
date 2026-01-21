@@ -1,0 +1,73 @@
+name: Recommend CD Pipeline
+run-name: Recommend CD • ${{ github.event.workflow_run.head_sha }}
+
+on:
+  workflow_run:
+    workflows: ["Recommend CI Pipeline"]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: recommend-cd-${{ github.workflow }}-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    if: >-
+      ${{
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        (github.event.workflow_run.head_branch == 'develop' ||
+        github.event.workflow_run.head_branch == 'main')
+      }}
+    runs-on: ubuntu-24.04-arm
+    env:
+      REPO_PATH: /home/${{ secrets.SSH_USER }}/13-team-project-ai
+      SERVICE_DIR: services/recommend
+      VENV_PATH: /home/${{ secrets.SSH_USER }}/.venvs/recommend
+      DEPLOY_BRANCH: ${{ github.event.workflow_run.head_branch }}
+      RESTART_CMD: sudo systemctl restart recommend
+
+    steps:
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s' "${{ secrets.SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -p "${{ secrets.SSH_PORT }}" "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Deploy (fetch/reset + install + restart)
+        run: |
+          ssh -p "${{ secrets.SSH_PORT }}" \
+            "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
+            "REPO_PATH='${REPO_PATH}' SERVICE_DIR='${SERVICE_DIR}' VENV_PATH='${VENV_PATH}' DEPLOY_BRANCH='${DEPLOY_BRANCH}' RESTART_CMD='${RESTART_CMD}' bash -s" <<'EOF'
+          set -euo pipefail
+
+          if [ ! -d "$REPO_PATH/.git" ]; then
+            echo "Repo not found at $REPO_PATH. Run provisioning first."
+            exit 1
+          fi
+
+          cd "$REPO_PATH"
+          git fetch --prune origin
+          git reset --hard "origin/$DEPLOY_BRANCH"
+
+          cd "$SERVICE_DIR"
+          VENV_PY="$VENV_PATH/bin/python"
+          if [ ! -x "$VENV_PY" ]; then
+            echo "Venv not found at $VENV_PATH. Run provisioning first."
+            exit 1
+          fi
+
+          "$VENV_PY" -m pip install --upgrade pip
+          "$VENV_PY" -m pip install -r requirements.txt
+
+          if [ -n "$RESTART_CMD" ]; then
+            eval "$RESTART_CMD"
+          else
+            echo "RESTART_CMD is empty; skipping restart."
+          fi
+          EOF
