@@ -1,0 +1,84 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# =========================
+# Virtualenv / Env
+# =========================
+venv/
+.env
+.env.*
+!.env.example
+
+# =========================
+# OS
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# Logs
+# =========================
+*.log
+logs/
+
+# =========================
+# IDE
+# =========================
+.vscode/
+.idea/
+
+# =========================
+# Docker
+# =========================
+*.tar
+docker-compose.override.yml
+
+# =========================
+# Crawling / Data
+# =========================
+data/
+datasets/
+*.csv
+*.json
+
+# =========================
+# AI Models / Weights 
+# =========================
+models/
+model/
+weights/
+checkpoints/
+ckpt/
+*.pt
+*.pth
+*.bin
+*.onnx
+*.engine
+*.safetensors
+
+# =========================
+# ML / LLM Cache
+# =========================
+.cache/
+huggingface/
+hf_cache/
+wandb/
+runs/
+
+# =========================
+# Test / Coverage
+# =========================
+.coverage
+htmlcov/
+
+# =========================
+# Frontend (있을 경우)
+# =========================
+node_modules/
+dist/
+build/
