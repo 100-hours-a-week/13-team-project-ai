@@ -17,7 +17,7 @@ on:
 
 permissions:
   contents: read
-  issues: write
+  pull-requests: write
 
 concurrency:
   group: recommend-ci-${{ github.workflow }}-${{ github.ref }}
@@ -48,6 +48,7 @@ jobs:
           pip install -r requirements-ci.txt
 
       - name: Lint (ruff)
+        id: lint
         run: ruff check .
 
       - name: Format check (ruff)
@@ -56,9 +57,11 @@ jobs:
         run: ruff format --check --diff .
 
       - name: Type check (mypy)
+        id: type_check
         run: mypy app --ignore-missing-imports
 
       - name: Run tests (pytest)
+        id: unit_tests
         run: pytest -q --maxfail=1 --disable-warnings || [ $? -eq 5 ]
 
       - name: Format check summary
@@ -74,61 +77,66 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Post CI summary to PR
+      - name: Prepare PR comment
+        id: pr_comment
         if: always() && github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        env:
-          CI_STATUS: ${{ job.status }}
-          FORMAT_STATUS: ${{ steps.format_check.outcome }}
+        run: |
+          status_icon() {
+            case "$1" in
+              success) echo "✅" ;;
+              failure) echo "❌" ;;
+              cancelled) echo "⚪" ;;
+              skipped) echo "⏭️" ;;
+              *) echo "❓" ;;
+            esac
+          }
+
+          lint_outcome="${{ steps.lint.outcome }}"
+          tests_outcome="${{ steps.unit_tests.outcome }}"
+          type_outcome="${{ steps.type_check.outcome }}"
+          format_outcome="${{ steps.format_check.outcome }}"
+
+          lint_icon="$(status_icon "$lint_outcome")"
+          tests_icon="$(status_icon "$tests_outcome")"
+          type_icon="$(status_icon "$type_outcome")"
+          format_icon="$(status_icon "$format_outcome")"
+
+          overall="success"
+          for outcome in "$lint_outcome" "$tests_outcome" "$type_outcome"; do
+            if [ "$outcome" = "failure" ] || [ "$outcome" = "cancelled" ]; then
+              overall="failure"
+              break
+            fi
+          done
+
+          if [ "$overall" = "success" ]; then
+            header="✅ **CI 검증 완료!**"
+          else
+            header="❌ **CI 검증 실패**"
+          fi
+
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          format_hint=""
+          if [ "$format_outcome" = "failure" ]; then
+            format_hint=" (run: \`ruff format services/recommend\`)"
+          fi
+
+          {
+            echo "message<<EOF"
+            echo "$header"
+            echo "- Lint: $lint_icon"
+            echo "- Unit tests: $tests_icon"
+            echo "- Type check: $type_icon"
+            echo "- Format: $format_icon$format_hint"
+            echo "- 실행 결과: $run_url"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # PR 코멘트로 요약 (태그로 1개 코멘트 유지/갱신)
+      - name: Comment CI status
+        if: always() && github.event_name == 'pull_request'
+        uses: thollander/actions-comment-pull-request@v2
         with:
-          script: |
-            const { owner, repo } = context.repo;
-            const prNumber = context.payload.pull_request.number;
-            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
-            const marker = "<!-- recommend-ci-status -->";
-            const status = process.env.CI_STATUS || "unknown";
-            const statusLine = status === "success" ? "Recommend CI succeeded." : "Recommend CI failed.";
-            const formatLine =
-              process.env.FORMAT_STATUS === "failure"
-                ? "Formatting needed: run `ruff format services/recommend`."
-                : null;
-            const body = [
-              marker,
-              statusLine,
-              formatLine,
-              `Run: ${runUrl}`,
-              "",
-              "If formatting failed, run:",
-              "`ruff format services/recommend`",
-            ].filter(Boolean).join("\n");
-
-            const comments = await github.rest.issues.listComments({
-              owner,
-              repo,
-              issue_number: prNumber,
-              per_page: 100,
-            });
-
-            const existing = comments.data.find(
-              (comment) =>
-                comment.user &&
-                comment.user.type === "Bot" &&
-                comment.body &&
-                comment.body.includes(marker),
-            );
-
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner,
-                repo,
-                comment_id: existing.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner,
-                repo,
-                issue_number: prNumber,
-                body,
-              });
-            }
+          message: ${{ steps.pr_comment.outputs.message }}
+          comment_tag: recommend_ci_status
