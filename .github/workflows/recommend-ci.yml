@@ -1,0 +1,134 @@
+name: Recommend CI Pipeline
+
+on:
+  pull_request:
+    branches: [main, develop]
+    types: [opened, synchronize, reopened]
+    paths:
+      - "services/recommend/**"
+      - ".github/workflows/recommend-ci.yml"
+      - ".github/workflows/recommend-cd.yml"
+  push:
+    branches: [main, develop]
+    paths:
+      - "services/recommend/**"
+      - ".github/workflows/recommend-ci.yml"
+      - ".github/workflows/recommend-cd.yml"
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: recommend-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-24.04-arm
+    defaults:
+      run:
+        working-directory: services/recommend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: |
+            services/recommend/requirements.txt
+            services/recommend/requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Format check (ruff)
+        id: format_check
+        continue-on-error: true
+        run: ruff format --check --diff .
+
+      - name: Type check (mypy)
+        run: mypy app --ignore-missing-imports
+
+      - name: Run tests (pytest)
+        run: pytest -q --maxfail=1 --disable-warnings || [ $? -eq 5 ]
+
+      - name: Format check summary
+        if: always()
+        run: |
+          if [ "${{ steps.format_check.outcome }}" = "failure" ]; then
+            {
+              echo "## Formatting"
+              echo ""
+              echo "Ruff formatting issues detected. Run:"
+              echo ""
+              echo "\`ruff format services/recommend\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Post CI summary to PR
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          CI_STATUS: ${{ job.status }}
+          FORMAT_STATUS: ${{ steps.format_check.outcome }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const prNumber = context.payload.pull_request.number;
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const marker = "<!-- recommend-ci-status -->";
+            const status = process.env.CI_STATUS || "unknown";
+            const statusLine = status === "success" ? "Recommend CI succeeded." : "Recommend CI failed.";
+            const formatLine =
+              process.env.FORMAT_STATUS === "failure"
+                ? "Formatting needed: run `ruff format services/recommend`."
+                : null;
+            const body = [
+              marker,
+              statusLine,
+              formatLine,
+              `Run: ${runUrl}`,
+              "",
+              "If formatting failed, run:",
+              "`ruff format services/recommend`",
+            ].filter(Boolean).join("\n");
+
+            const comments = await github.rest.issues.listComments({
+              owner,
+              repo,
+              issue_number: prNumber,
+              per_page: 100,
+            });
+
+            const existing = comments.data.find(
+              (comment) =>
+                comment.user &&
+                comment.user.type === "Bot" &&
+                comment.body &&
+                comment.body.includes(marker),
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: prNumber,
+                body,
+              });
+            }
