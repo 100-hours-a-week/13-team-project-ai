@@ -1,0 +1,142 @@
+name: Recommend CI Pipeline
+
+on:
+  pull_request:
+    branches: [main, develop]
+    types: [opened, synchronize, reopened]
+    paths:
+      - "services/recommend/**"
+      - ".github/workflows/recommend-ci.yml"
+      - ".github/workflows/recommend-cd.yml"
+  push:
+    branches: [main, develop]
+    paths:
+      - "services/recommend/**"
+      - ".github/workflows/recommend-ci.yml"
+      - ".github/workflows/recommend-cd.yml"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: recommend-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-24.04-arm
+    defaults:
+      run:
+        working-directory: services/recommend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: |
+            services/recommend/requirements.txt
+            services/recommend/requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Lint (ruff)
+        id: lint
+        run: ruff check .
+
+      - name: Format check (ruff)
+        id: format_check
+        continue-on-error: true
+        run: ruff format --check --diff .
+
+      - name: Type check (mypy)
+        id: type_check
+        run: mypy app --ignore-missing-imports
+
+      - name: Run tests (pytest)
+        id: unit_tests
+        run: pytest -q --maxfail=1 --disable-warnings || [ $? -eq 5 ]
+
+      - name: Format check summary
+        if: always()
+        run: |
+          if [ "${{ steps.format_check.outcome }}" = "failure" ]; then
+            {
+              echo "## Formatting"
+              echo ""
+              echo "Ruff formatting issues detected. Run:"
+              echo ""
+              echo "\`ruff format services/recommend\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Prepare PR comment
+        id: pr_comment
+        if: always() && github.event_name == 'pull_request'
+        run: |
+          status_icon() {
+            case "$1" in
+              success) echo "✅" ;;
+              failure) echo "❌" ;;
+              cancelled) echo "⚪" ;;
+              skipped) echo "⏭️" ;;
+              *) echo "❓" ;;
+            esac
+          }
+
+          lint_outcome="${{ steps.lint.outcome }}"
+          tests_outcome="${{ steps.unit_tests.outcome }}"
+          type_outcome="${{ steps.type_check.outcome }}"
+          format_outcome="${{ steps.format_check.outcome }}"
+
+          lint_icon="$(status_icon "$lint_outcome")"
+          tests_icon="$(status_icon "$tests_outcome")"
+          type_icon="$(status_icon "$type_outcome")"
+          format_icon="$(status_icon "$format_outcome")"
+
+          overall="success"
+          for outcome in "$lint_outcome" "$tests_outcome" "$type_outcome"; do
+            if [ "$outcome" = "failure" ] || [ "$outcome" = "cancelled" ]; then
+              overall="failure"
+              break
+            fi
+          done
+
+          if [ "$overall" = "success" ]; then
+            header="✅ **CI 검증 완료!**"
+          else
+            header="❌ **CI 검증 실패**"
+          fi
+
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          format_hint=""
+          if [ "$format_outcome" = "failure" ]; then
+            format_hint=" (run: \`ruff format services/recommend\`)"
+          fi
+
+          {
+            echo "message<<EOF"
+            echo "$header"
+            echo "- Lint: $lint_icon"
+            echo "- Unit tests: $tests_icon"
+            echo "- Type check: $type_icon"
+            echo "- Format: $format_icon$format_hint"
+            echo "- 실행 결과: $run_url"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # PR 코멘트로 요약 (태그로 1개 코멘트 유지/갱신)
+      - name: Comment CI status
+        if: always() && github.event_name == 'pull_request'
+        uses: thollander/actions-comment-pull-request@v2
+        with:
+          message: ${{ steps.pr_comment.outputs.message }}
+          comment_tag: recommend_ci_status
