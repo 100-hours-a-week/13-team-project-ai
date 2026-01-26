@@ -9,7 +9,7 @@ from typing import List, Dict
 # Search Configuration
 # =========================
 # Replace with your Google Maps API Key
-GOOGLE_API_KEY = "AIzaSyCEYNHmxwi-XkH2rSXuadzy3Gib2lylLqU"
+GOOGLE_API_KEY = "[ENCRYPTION_KEY]"
 
 # =========================
 # Query Generator Configuration
@@ -134,7 +134,7 @@ def search_restaurants(query: str) -> List[Dict[str, str]]:
 # Main Execution
 # =========================
 def main():
-    if GOOGLE_API_KEY == "AIzaSyCEYNHmxwi-XkH2rSXuadzy3Gib2lylLqU" == False: # Just a check for default
+    if GOOGLE_API_KEY == "[ENCRYPTION_KEY]" == False: # Just a check for default
         log.error("Please set your GOOGLE_API_KEY in the script.")
         return
 
