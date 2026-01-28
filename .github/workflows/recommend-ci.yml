@@ -40,7 +40,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          pip install -r requirements-ci.txt
 
       # Lint/Format: 경고만 (CI 블록 안함)
       # Type/Test: 실패 시 CI 실패
