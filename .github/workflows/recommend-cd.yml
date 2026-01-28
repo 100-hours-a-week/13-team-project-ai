@@ -1,9 +1,9 @@
-name: Recommend CD Pipeline
-run-name: Recommend CD • ${{ github.event.workflow_run.head_sha }}
+name: AI RECOMMEND CD Pipeline
+run-name: AI RECOMMEND CD Pipeline • ${{ github.event.workflow_run.head_sha }}
 
 on:
   workflow_run:
-    workflows: ["Recommend CI Pipeline"]
+    workflows: ["AI RECOMMEND CI Pipeline"]
     types: [completed]
 
 permissions:
@@ -15,59 +15,112 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  deploy:
-    if: >-
-      ${{
-        github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.event == 'push' &&
-        (github.event.workflow_run.head_branch == 'develop' ||
-        github.event.workflow_run.head_branch == 'main')
-      }}
+  cd:
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
     runs-on: ubuntu-24.04-arm
     env:
       REPO_PATH: /home/${{ secrets.SSH_USER }}/13-team-project-ai
       SERVICE_DIR: services/recommend
       VENV_PATH: /home/${{ secrets.SSH_USER }}/.venvs/recommend
       DEPLOY_BRANCH: ${{ github.event.workflow_run.head_branch }}
-      RESTART_CMD: sudo systemctl restart recommend
 
     steps:
-      - name: Setup SSH key
+      - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
           printf '%s' "${{ secrets.SSH_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -p "${{ secrets.SSH_PORT }}" "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+          echo "SSH_CMD=ssh -p ${{ secrets.SSH_PORT }} ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" >> "$GITHUB_ENV"
 
-      - name: Deploy (fetch/reset + install + restart)
+      - name: Backup current state
         run: |
-          ssh -p "${{ secrets.SSH_PORT }}" \
-            "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
-            "REPO_PATH='${REPO_PATH}' SERVICE_DIR='${SERVICE_DIR}' VENV_PATH='${VENV_PATH}' DEPLOY_BRANCH='${DEPLOY_BRANCH}' RESTART_CMD='${RESTART_CMD}' bash -s" <<'EOF'
-          set -euo pipefail
+          $SSH_CMD "cd $REPO_PATH && git rev-parse HEAD > /tmp/prev_sha"
+          echo "ROLLBACK_ENABLED=true" >> "$GITHUB_ENV"
 
-          if [ ! -d "$REPO_PATH/.git" ]; then
-            echo "Repo not found at $REPO_PATH. Run provisioning first."
-            exit 1
-          fi
+      - name: Pull latest code
+        run: |
+          $SSH_CMD "cd $REPO_PATH && git fetch --prune origin && git reset --hard origin/$DEPLOY_BRANCH"
 
-          cd "$REPO_PATH"
-          git fetch --prune origin
-          git reset --hard "origin/$DEPLOY_BRANCH"
+      - name: Install dependencies
+        run: |
+          $SSH_CMD "$VENV_PATH/bin/pip install --upgrade pip -q && $VENV_PATH/bin/pip install -r $REPO_PATH/$SERVICE_DIR/requirements.txt -q"
 
-          cd "$SERVICE_DIR"
-          VENV_PY="$VENV_PATH/bin/python"
-          if [ ! -x "$VENV_PY" ]; then
-            echo "Venv not found at $VENV_PATH. Run provisioning first."
-            exit 1
-          fi
+      - name: Restart service
+        run: |
+          $SSH_CMD "sudo systemctl restart recommend"
 
-          "$VENV_PY" -m pip install --upgrade pip
-          "$VENV_PY" -m pip install -r requirements.txt
+      - name: Health check
+        run: |
+          $SSH_CMD "curl -sf --retry 10 --retry-delay 3 http://127.0.0.1:8000/health"
 
-          if [ -n "$RESTART_CMD" ]; then
-            eval "$RESTART_CMD"
+      # - name: Smoke Test
+      #   run: |
+      #     $SSH_CMD "curl -sf http://
+
+      - name: Rollback on failure
+        id: rollback
+        if: (failure() || cancelled()) && env.ROLLBACK_ENABLED == 'true'
+        continue-on-error: true
+        run: |
+          $SSH_CMD "cd $REPO_PATH && git reset --hard \$(cat /tmp/prev_sha) && sudo systemctl restart recommend"
+
+      - name: Notify Discord
+        if: always()
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          COMMIT_MSG: ${{ github.event.workflow_run.head_commit.message }}
+          AUTHOR: ${{ github.event.workflow_run.head_commit.author.name }}
+          RUN_NUM: ${{ github.event.workflow_run.run_number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            TITLE="AI Recommend 배포 성공"
+            DESC="새로운 버전이 EC2 서버에 정상적으로 배포되었습니다."
+            COLOR=3066993
+          elif [ "${{ job.status }}" = "cancelled" ]; then
+            TITLE="AI Recommend 배포 취소"
+            DESC="배포가 취소되었습니다."
+            COLOR=9807270
+          elif [ "${{ steps.rollback.outcome }}" = "success" ]; then
+            TITLE="AI Recommend 배포 실패 (롤백 완료)"
+            DESC="배포 실패로 이전 버전으로 롤백되었습니다."
+            COLOR=16753920
           else
-            echo "RESTART_CMD is empty; skipping restart."
+            TITLE="AI Recommend 배포 실패 (롤백 실패)"
+            DESC="롤백에 실패했습니다. 수동 확인이 필요합니다."
+            COLOR=15158332
           fi
-          EOF
+
+          jq -n \
+            --arg title "$TITLE" \
+            --arg desc "$DESC" \
+            --arg color "$COLOR" \
+            --arg branch "$BRANCH" \
+            --arg run_num "$RUN_NUM" \
+            --arg author "$AUTHOR" \
+            --arg msg "$COMMIT_MSG" \
+            --arg url "$RUN_URL" \
+            '{
+              embeds: [{
+                title: $title,
+                description: $desc,
+                color: ($color | tonumber),
+                fields: [
+                  {name: "브랜치", value: $branch, inline: true},
+                  {name: "빌드 번호", value: ("#" + $run_num), inline: true},
+                  {name: "작성자", value: $author, inline: true},
+                  {name: "커밋 메시지", value: $msg, inline: false},
+                  {name: "상세", value: ("[Actions 로그](" + $url + ")"), inline: false}
+                ],
+                footer: {
+                  text: "AI Recommend CD",
+                  icon_url: "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
+                }
+              }]
+            }' | curl -sf -X POST "$WEBHOOK" -H "Content-Type: application/json" -d @-
+
+      # - name: Exit with failure
+      #   if: failure() || cancelled()
+      #   run: exit 1
