@@ -47,21 +47,38 @@ jobs:
       - name: Lint (ruff)
         id: lint
         continue-on-error: true # 경고만
-        run: ruff check . --output-format=github
+        run: |
+          ruff check . --output-format=github
+          ruff check . --output-format=full > lint-results.txt 2>&1 || true
 
       - name: Format check (ruff)
         id: format_check
         continue-on-error: true # 경고만
-        run: ruff format --check --diff .
+        run: |
+          ruff format --check --diff . | tee format-diff.txt
 
       - name: Type check (mypy)
         id: typecheck
-        run: mypy app --ignore-missing-imports
+        run: |
+          mypy app --ignore-missing-imports | tee mypy-results.txt
 
       - name: Run tests (pytest)
         id: test
         # || [ $? -eq 5 ]: 테스트 파일 없으면 통과 (TODO: 테스트 추가 후 제거)
-        run: pytest -v --tb=short || [ $? -eq 5 ]
+        run: |
+          pytest -v --tb=short --junitxml=test-results.xml || [ $? -eq 5 ]
+
+      - name: Upload CI results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ai-ci-results-${{ github.run_number }}
+          path: |
+            services/recommend/lint-results.txt
+            services/recommend/format-diff.txt
+            services/recommend/mypy-results.txt
+            services/recommend/test-results.xml
+          retention-days: 30
 
       - name: Notify Discord
         if: always()
