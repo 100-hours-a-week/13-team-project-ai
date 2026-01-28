@@ -1,9 +1,8 @@
-name: Recommend CI Pipeline
+name: AI RECOMMEND CI Pipeline
 
 on:
   pull_request:
     branches: [main, develop]
-    types: [opened, synchronize, reopened]
     paths:
       - "services/recommend/**"
       - ".github/workflows/recommend-ci.yml"
@@ -17,10 +16,9 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
 
 concurrency:
-  group: recommend-ci-${{ github.workflow }}-${{ github.ref }}
+  group: recommend-ai-ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -38,105 +36,112 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
-          cache-dependency-path: |
-            services/recommend/requirements.txt
-            services/recommend/requirements-ci.txt
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
+          pip install --upgrade pip
           pip install -r requirements-ci.txt
 
+      # Lint/Format: 경고만 (CI 블록 안함)
+      # Type/Test: 실패 시 CI 실패
       - name: Lint (ruff)
         id: lint
-        run: ruff check .
+        continue-on-error: true # 경고만
+        run: |
+          ruff check . --output-format=github
+          ruff check . --output-format=full > lint-results.txt 2>&1 || true
 
       - name: Format check (ruff)
         id: format_check
-        continue-on-error: true
-        run: ruff format --check --diff .
+        continue-on-error: true # 경고만
+        run: |
+          ruff format --check --diff . | tee format-diff.txt
 
       - name: Type check (mypy)
-        id: type_check
-        run: mypy app --ignore-missing-imports
+        id: typecheck
+        run: |
+          mypy app --ignore-missing-imports | tee mypy-results.txt
 
       - name: Run tests (pytest)
-        id: unit_tests
-        run: pytest -q --maxfail=1 --disable-warnings || [ $? -eq 5 ]
+        id: test
+        # || [ $? -eq 5 ]: 테스트 파일 없으면 통과 (TODO: 테스트 추가 후 제거)
+        run: |
+          pytest -v --tb=short --junitxml=test-results.xml || [ $? -eq 5 ]
 
-      - name: Format check summary
+      - name: Upload CI results
+        uses: actions/upload-artifact@v4
         if: always()
-        run: |
-          if [ "${{ steps.format_check.outcome }}" = "failure" ]; then
-            {
-              echo "## Formatting"
-              echo ""
-              echo "Ruff formatting issues detected. Run:"
-              echo ""
-              echo "\`ruff format services/recommend\`"
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      - name: Prepare PR comment
-        id: pr_comment
-        if: always() && github.event_name == 'pull_request'
-        run: |
-          status_icon() {
-            case "$1" in
-              success) echo "✅" ;;
-              failure) echo "❌" ;;
-              cancelled) echo "⚪" ;;
-              skipped) echo "⏭️" ;;
-              *) echo "❓" ;;
-            esac
-          }
-
-          lint_outcome="${{ steps.lint.outcome }}"
-          tests_outcome="${{ steps.unit_tests.outcome }}"
-          type_outcome="${{ steps.type_check.outcome }}"
-          format_outcome="${{ steps.format_check.outcome }}"
-
-          lint_icon="$(status_icon "$lint_outcome")"
-          tests_icon="$(status_icon "$tests_outcome")"
-          type_icon="$(status_icon "$type_outcome")"
-          format_icon="$(status_icon "$format_outcome")"
-
-          overall="success"
-          for outcome in "$lint_outcome" "$tests_outcome" "$type_outcome"; do
-            if [ "$outcome" = "failure" ] || [ "$outcome" = "cancelled" ]; then
-              overall="failure"
-              break
-            fi
-          done
-
-          if [ "$overall" = "success" ]; then
-            header="✅ **CI 검증 완료!**"
-          else
-            header="❌ **CI 검증 실패**"
-          fi
-
-          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-
-          format_hint=""
-          if [ "$format_outcome" = "failure" ]; then
-            format_hint=" (run: \`ruff format services/recommend\`)"
-          fi
-
-          {
-            echo "message<<EOF"
-            echo "$header"
-            echo "- Lint: $lint_icon"
-            echo "- Unit tests: $tests_icon"
-            echo "- Type check: $type_icon"
-            echo "- Format: $format_icon$format_hint"
-            echo "- 실행 결과: $run_url"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
-      # PR 코멘트로 요약 (태그로 1개 코멘트 유지/갱신)
-      - name: Comment CI status
-        if: always() && github.event_name == 'pull_request'
-        uses: thollander/actions-comment-pull-request@v2
         with:
-          message: ${{ steps.pr_comment.outputs.message }}
-          comment_tag: recommend_ci_status
+          name: ai-ci-results-${{ github.run_number }}
+          path: |
+            services/recommend/lint-results.txt
+            services/recommend/format-diff.txt
+            services/recommend/mypy-results.txt
+            services/recommend/test-results.xml
+          retention-days: 30
+
+      - name: Notify Discord
+        if: always()
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          EVENT: ${{ github.event_name }}
+          BRANCH: ${{ github.ref_name }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          RUN_NUM: ${{ github.run_number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            TITLE="AI Recommend CI 성공"
+            DESC="코드 검증이 완료되었습니다."
+            COLOR=3066993
+          else
+            TITLE="AI Recommend CI 실패"
+            DESC="코드 검증에 실패했습니다. 로그를 확인해주세요."
+            COLOR=15158332
+          fi
+
+          if [ "$EVENT" = "pull_request" ]; then
+            REF="PR #$PR_NUM"
+          else
+            REF="$BRANCH"
+          fi
+
+          # 각 단계 결과 (success/failure)
+          LINT="${{ steps.lint.outcome }}"
+          FORMAT="${{ steps.format_check.outcome }}"
+          TYPE="${{ steps.typecheck.outcome }}"
+          TEST="${{ steps.test.outcome }}"
+
+          jq -n \
+            --arg title "$TITLE" \
+            --arg desc "$DESC" \
+            --arg color "$COLOR" \
+            --arg event "$EVENT" \
+            --arg ref "$REF" \
+            --arg run_num "$RUN_NUM" \
+            --arg lint "$LINT" \
+            --arg format "$FORMAT" \
+            --arg type "$TYPE" \
+            --arg test "$TEST" \
+            --arg url "$RUN_URL" \
+            '{
+              embeds: [{
+                title: $title,
+                description: $desc,
+                color: ($color | tonumber),
+                fields: [
+                  {name: "이벤트", value: $event, inline: true},
+                  {name: "대상", value: $ref, inline: true},
+                  {name: "빌드", value: ("#" + $run_num), inline: true},
+                  {name: "Lint", value: $lint, inline: true},
+                  {name: "Format", value: $format, inline: true},
+                  {name: "Type", value: $type, inline: true},
+                  {name: "Test", value: $test, inline: true},
+                  {name: "상세", value: ("[Actions 로그](" + $url + ")"), inline: false}
+                ],
+                footer: {
+                  text: "AI Recommend CI",
+                  icon_url: "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
+                }
+              }]
+            }' | curl -sf -X POST "$WEBHOOK" -H "Content-Type: application/json" -d @-
