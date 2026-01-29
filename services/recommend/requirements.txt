@@ -1,2 +1,12 @@
+# Web Framework & Server
 fastapi
 uvicorn[standard]
+
+# Database (PostgreSQL)
+psycopg2-binary
+
+# Configuration & Environment
+python-dotenv
+
+# Data Validation
+pydantic
