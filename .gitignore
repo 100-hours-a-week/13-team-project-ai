@@ -86,3 +86,6 @@ htmlcov/
 node_modules/
 dist/
 build/
+test
+test_v2_api.py
+
