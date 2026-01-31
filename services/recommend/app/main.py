@@ -1,5 +1,6 @@
 import uvicorn
 from fastapi import FastAPI
+from prometheus_fastapi_instrumentator import Instrumentator
 from app.api.v1.recommend_router import router as recommendation_router
 
 app = FastAPI(
@@ -7,6 +8,8 @@ app = FastAPI(
     description="Group restaurant recommendation service",
     version="0.1.0"
 )
+
+Instrumentator().instrument(app).expose(app)
 
 app.include_router(recommendation_router, prefix="/api/v1")
 
