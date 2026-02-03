@@ -10,3 +10,6 @@ python-dotenv
 
 # Data Validation
 pydantic
+
+# Monitoring (Prometheus Metrics)
+prometheus-fastapi-instrumentator
