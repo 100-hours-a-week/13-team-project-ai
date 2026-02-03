@@ -75,4 +75,5 @@ def calculate_recommendations(db_conn, req):
     
     # JSON 데이터에 있던 swipe.card_limit을 추천 개수로 활용
     limit = req.swipe.card_limit if hasattr(req, 'swipe') else 10
+    limit = limit * 2
     return scored_list[:limit]
