@@ -10,12 +10,15 @@
 __pycache__/
 *.pyc
 *.pyo
+*.egg-info/
 
 # =========================
-# Env
+# Env / Secrets
 # =========================
 .env
 .env.*
+*.key
+*.pem
 
 # =========================
 # IDE
@@ -32,7 +35,7 @@ data/
 datasets/
 
 # =========================
-# AI Models / Cache 
+# AI Models / Cache
 # =========================
 models/
 model/
@@ -58,6 +61,13 @@ docs/
 README.md
 
 # =========================
+# Docker (self-reference 방지)
+# =========================
+Dockerfile
+docker-compose*.yml
+
+# =========================
 # OS
 # =========================
 .DS_Store
+Thumbs.db
