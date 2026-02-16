@@ -1,0 +1,38 @@
+# =============================================================================
+# Recommend Server (FastAPI)
+# 배포: ECR에서 이미지 pull → docker compose up -d
+# =============================================================================
+services:
+  app:
+    image: ${ECR_REGISTRY}/moyeobab/recommend:${IMAGE_TAG}
+    ports:
+      - "8000:8000"
+    env_file: .env
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  promtail:
+    image: grafana/promtail:3.4.2
+    command: -config.file=/etc/promtail/config.yml -config.expand-env=true
+    volumes:
+      - ./promtail.yml:/etc/promtail/config.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - promtail-positions:/tmp
+    environment:
+      - HOSTNAME=recommend-v2
+      - ENV=dev
+    restart: unless-stopped
+
+volumes:
+  promtail-positions:

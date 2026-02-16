@@ -25,11 +25,19 @@ jobs:
       COMPOSE_DIR: /home/ubuntu/recommend
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
       - name: Configure AWS Credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
+
+      - name: Sync config to S3
+        run: aws s3 sync services/recommend/docker/ s3://moyeobab-dev-config/recommend/ --delete
 
       - name: Deploy via SSM Send Command
         id: ssm-deploy
@@ -46,6 +54,10 @@ jobs:
               "REGION='"${{ env.AWS_REGION }}"'",
               "IMAGE_TAG='"${{ env.IMAGE_TAG }}"'",
               "COMPOSE_DIR='"${{ env.COMPOSE_DIR }}"'",
+              "",
+              "# S3에서 배포 설정 파일 동기화 (docker-compose, promtail)",
+              "mkdir -p ${COMPOSE_DIR}",
+              "aws s3 sync s3://moyeobab-dev-config/recommend/ ${COMPOSE_DIR}/ --exclude '.env' --region ${REGION}",
               "",
               "# 현재 이미지 태그 백업 (롤백용)",
               "PREV_IMAGE=$(docker inspect --format={{.Config.Image}} $(docker compose -f ${COMPOSE_DIR}/docker-compose.yml ps -q app) 2>/dev/null || echo \"\")",
