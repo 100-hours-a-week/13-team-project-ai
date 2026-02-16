@@ -33,11 +33,17 @@ jobs:
       COMPOSE_DIR: /home/ubuntu/recommend
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Configure AWS Credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
+
+      - name: Sync config to S3
+        run: aws s3 sync services/recommend/docker/ s3://moyeobab-dev-config/recommend/ --delete
 
       - name: Verify image exists in ECR
         run: |
@@ -62,6 +68,10 @@ jobs:
               "REGION='"${{ env.AWS_REGION }}"'",
               "IMAGE_TAG='"${{ env.IMAGE_TAG }}"'",
               "COMPOSE_DIR='"${{ env.COMPOSE_DIR }}"'",
+              "",
+              "# S3에서 배포 설정 파일 동기화",
+              "mkdir -p ${COMPOSE_DIR}",
+              "aws s3 sync s3://moyeobab-dev-config/recommend/ ${COMPOSE_DIR}/ --exclude '.env' --region ${REGION}",
               "",
               "# ECR login",
               "ECR_REGISTRY=$(aws sts get-caller-identity --query Account --output text).dkr.ecr.${REGION}.amazonaws.com",
