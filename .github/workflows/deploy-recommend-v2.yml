@@ -1,27 +1,35 @@
-name: AI RECOMMEND V2 CD Pipeline
-run-name: AI RECOMMEND V2 CD • ${{ github.event.workflow_run.head_sha }}
+name: AI RECOMMEND V2 Manual Deploy
+run-name: AI RECOMMEND V2 Deploy • ${{ inputs.image_tag }} (${{ inputs.action }})
 
 on:
-  workflow_run:
-    workflows: ["AI RECOMMEND V2 CI Pipeline"]
-    types: [completed]
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "배포 액션"
+        required: true
+        type: choice
+        options:
+          - deploy
+          - rollback
+      image_tag:
+        description: "이미지 태그 (예: sha-abc1234)"
+        required: true
+        type: string
 
 permissions:
   id-token: write
-  actions: read
 
 concurrency:
-  group: recommend-v2-cd-${{ github.event.workflow_run.head_sha }}
-  cancel-in-progress: true
+  group: recommend-v2-deploy
+  cancel-in-progress: false
 
 jobs:
   deploy:
-    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
     runs-on: ubuntu-24.04-arm
     environment: develop
     env:
       AWS_REGION: ap-northeast-2
-      IMAGE_TAG: sha-${{ github.event.workflow_run.head_sha }}
+      IMAGE_TAG: ${{ inputs.image_tag }}
       COMPOSE_DIR: /home/ubuntu/recommend
 
     steps:
@@ -31,13 +39,21 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Verify image exists in ECR
+        run: |
+          aws ecr describe-images \
+            --repository-name moyeobab/recommend \
+            --image-ids imageTag=${{ env.IMAGE_TAG }} \
+            --query 'imageDetails[0].imagePushedAt' --output text
+          echo "Image ${{ env.IMAGE_TAG }} confirmed"
+
       - name: Deploy via SSM Send Command
         id: ssm-deploy
         run: |
           COMMAND_ID=$(aws ssm send-command \
             --targets "Key=tag:Service,Values=recommend" "Key=tag:Environment,Values=dev" \
             --document-name "AWS-RunShellScript" \
-            --comment "Deploy recommend ${{ env.IMAGE_TAG }}" \
+            --comment "${{ inputs.action }} recommend ${{ env.IMAGE_TAG }}" \
             --timeout-seconds 300 \
             --max-concurrency "1" \
             --max-errors "0" \
@@ -46,10 +62,6 @@ jobs:
               "REGION='"${{ env.AWS_REGION }}"'",
               "IMAGE_TAG='"${{ env.IMAGE_TAG }}"'",
               "COMPOSE_DIR='"${{ env.COMPOSE_DIR }}"'",
-              "",
-              "# 현재 이미지 태그 백업 (롤백용)",
-              "PREV_IMAGE=$(docker inspect --format={{.Config.Image}} $(docker compose -f ${COMPOSE_DIR}/docker-compose.yml ps -q app) 2>/dev/null || echo \"\")",
-              "echo \"Current image: ${PREV_IMAGE}\"",
               "",
               "# ECR login",
               "ECR_REGISTRY=$(aws sts get-caller-identity --query Account --output text).dkr.ecr.${REGION}.amazonaws.com",
@@ -75,15 +87,7 @@ jobs:
               "  exit 0",
               "fi",
               "",
-              "# Rollback on health check failure",
-              "echo \"ROLLBACK: health check failed, reverting to ${PREV_IMAGE}\"",
-              "if [ -n \"${PREV_IMAGE}\" ]; then",
-              "  PREV_TAG=${PREV_IMAGE##*:}",
-              "  sed -i \"s/IMAGE_TAG=.*/IMAGE_TAG=${PREV_TAG}/\" ${COMPOSE_DIR}/.env",
-              "  cd ${COMPOSE_DIR} && docker compose up -d",
-              "  sleep 5",
-              "  curl -sf --retry 3 --retry-delay 2 http://localhost:8000/health && echo \"Rollback succeeded\" || echo \"Rollback also failed\"",
-              "fi",
+              "echo \"Health check failed\"",
               "exit 1"
             ]' \
             --query "Command.CommandId" --output text)
@@ -96,7 +100,6 @@ jobs:
         run: |
           COMMAND_ID="${{ steps.ssm-deploy.outputs.command_id }}"
 
-          # SSM 타겟 인스턴스 ID 조회
           sleep 5
           INSTANCE_IDS=$(aws ssm list-command-invocations \
             --command-id "$COMMAND_ID" \
@@ -139,19 +142,15 @@ jobs:
         if: always()
         env:
           WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          BRANCH: ${{ github.event.workflow_run.head_branch }}
-          AUTHOR: ${{ github.event.workflow_run.head_commit.author.name }}
-          COMMIT_MSG: ${{ github.event.workflow_run.head_commit.message }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          RESULT="${{ steps.wait-result.outputs.result }}"
           if [ "${{ job.status }}" = "success" ]; then
-            TITLE="AI Recommend V2 배포 성공"
-            DESC="EC2에 \`${{ env.IMAGE_TAG }}\` 배포 완료"
+            TITLE="AI Recommend V2 수동 ${{ inputs.action }} 성공"
+            DESC="\`${{ env.IMAGE_TAG }}\` ${{ inputs.action }} 완료"
             COLOR=3066993
           else
-            TITLE="AI Recommend V2 배포 실패"
-            DESC="배포에 실패했습니다. 자동 롤백이 시도되었을 수 있습니다."
+            TITLE="AI Recommend V2 수동 ${{ inputs.action }} 실패"
+            DESC="\`${{ env.IMAGE_TAG }}\` ${{ inputs.action }} 실패"
             COLOR=15158332
           fi
 
@@ -159,10 +158,9 @@ jobs:
             --arg title "$TITLE" \
             --arg desc "$DESC" \
             --arg color "$COLOR" \
-            --arg branch "$BRANCH" \
-            --arg author "$AUTHOR" \
-            --arg msg "$COMMIT_MSG" \
+            --arg actor "${{ github.actor }}" \
             --arg tag "${{ env.IMAGE_TAG }}" \
+            --arg action "${{ inputs.action }}" \
             --arg url "$RUN_URL" \
             '{
               embeds: [{
@@ -170,14 +168,13 @@ jobs:
                 description: $desc,
                 color: ($color | tonumber),
                 fields: [
-                  {name: "브랜치", value: $branch, inline: true},
-                  {name: "작성자", value: $author, inline: true},
+                  {name: "실행자", value: $actor, inline: true},
+                  {name: "액션", value: $action, inline: true},
                   {name: "이미지 태그", value: ("`" + $tag + "`"), inline: true},
-                  {name: "커밋", value: $msg, inline: false},
                   {name: "상세", value: ("[Actions 로그](" + $url + ")"), inline: false}
                 ],
                 footer: {
-                  text: "AI Recommend V2 CD",
+                  text: "AI Recommend V2 Manual Deploy",
                   icon_url: "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
                 }
               }]
