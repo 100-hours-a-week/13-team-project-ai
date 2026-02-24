@@ -7,6 +7,9 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
+# 모든 하위 폴더의 체크포인트 무시
+**/.ipynb_checkpoints/
+.ipynb_checkpoints/
 # =========================
 # Virtualenv / Env
 # =========================

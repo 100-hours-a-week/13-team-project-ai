@@ -10,18 +10,32 @@
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
 
 # =========================
-# Env
+# Virtual Environment
+# =========================
+.venv/
+venv/
+ENV/
+
+# =========================
+# Env (민감정보 절대 포함 금지)
 # =========================
 .env
 .env.*
+*.env
 
 # =========================
 # IDE
 # =========================
 .vscode/
 .idea/
+*.swp
+*.swo
 
 # =========================
 # Logs / Data
@@ -32,7 +46,7 @@ data/
 datasets/
 
 # =========================
-# AI Models / Cache 
+# AI Models / Cache
 # =========================
 models/
 model/
@@ -51,13 +65,32 @@ hf_cache/
 wandb/
 
 # =========================
-# Docs / Tests
+# Docs / Tests / CI
 # =========================
 tests/
 docs/
-README.md
+*.md
+requirements-ci.txt
+
+# =========================
+# Docker (자기 자신 제외)
+# =========================
+Dockerfile*
+docker-compose*.yml
+.dockerignore
 
 # =========================
 # OS
 # =========================
 .DS_Store
+.DS_Store
+Thumbs.db
+
+# =========================
+# Coverage / Lint cache
+# =========================
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/

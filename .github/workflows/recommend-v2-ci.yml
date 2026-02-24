@@ -1,0 +1,157 @@
+name: AI RECOMMEND V2 CI Pipeline
+
+on:
+  pull_request:
+    branches: [develop]
+    paths:
+      - "services/recommend/**"
+      - ".github/workflows/recommend-v2-ci.yml"
+  push:
+    branches: [develop]
+    paths:
+      - "services/recommend/**"
+      - ".github/workflows/recommend-v2-ci.yml"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: recommend-v2-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static-analysis:
+    runs-on: ubuntu-24.04-arm
+    defaults:
+      run:
+        working-directory: services/recommend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements-ci.txt
+
+      - name: Lint (ruff)
+        id: lint
+        continue-on-error: true
+        run: |
+          ruff check . --output-format=github
+          ruff check . --output-format=full > lint-results.txt 2>&1 || true
+
+      - name: Format check (ruff)
+        id: format_check
+        continue-on-error: true
+        run: |
+          ruff format --check --diff . | tee format-diff.txt
+
+      - name: Type check (mypy)
+        id: typecheck
+        run: |
+          mypy app --ignore-missing-imports | tee mypy-results.txt
+
+      - name: Run tests (pytest)
+        id: test
+        run: |
+          pytest -v --tb=short --junitxml=test-results.xml || [ $? -eq 5 ]
+
+      - name: Upload CI results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ai-v2-ci-results-${{ github.run_number }}
+          path: |
+            services/recommend/lint-results.txt
+            services/recommend/format-diff.txt
+            services/recommend/mypy-results.txt
+            services/recommend/test-results.xml
+          retention-days: 30
+
+  build-and-push:
+    needs: static-analysis
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04-arm
+    environment: develop
+    defaults:
+      run:
+        working-directory: services/recommend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ap-northeast-2
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push image to Amazon ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: moyeobab/recommend
+          IMAGE_TAG: sha-${{ github.sha }}
+        run: |
+          if aws ecr describe-images --repository-name $ECR_REPOSITORY --image-ids imageTag=$IMAGE_TAG 2>/dev/null; then
+            echo "Image $IMAGE_TAG already exists, skipping build"
+            exit 0
+          fi
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+      - name: Notify Discord
+        if: always()
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          BRANCH: ${{ github.ref_name }}
+          RUN_NUM: ${{ github.run_number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          IMAGE_TAG: sha-${{ github.sha }}
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            TITLE="AI Recommend V2 CI 성공"
+            DESC="이미지 빌드 및 ECR push 완료 (\`${IMAGE_TAG}\`)"
+            COLOR=3066993
+          else
+            TITLE="AI Recommend V2 CI 실패"
+            DESC="빌드에 실패했습니다. 로그를 확인해주세요."
+            COLOR=15158332
+          fi
+
+          jq -n \
+            --arg title "$TITLE" \
+            --arg desc "$DESC" \
+            --arg color "$COLOR" \
+            --arg branch "$BRANCH" \
+            --arg run_num "$RUN_NUM" \
+            --arg tag "$IMAGE_TAG" \
+            --arg url "$RUN_URL" \
+            '{
+              embeds: [{
+                title: $title,
+                description: $desc,
+                color: ($color | tonumber),
+                fields: [
+                  {name: "브랜치", value: $branch, inline: true},
+                  {name: "빌드", value: ("#" + $run_num), inline: true},
+                  {name: "이미지 태그", value: ("`" + $tag + "`"), inline: true},
+                  {name: "상세", value: ("[Actions 로그](" + $url + ")"), inline: false}
+                ],
+                footer: {
+                  text: "AI Recommend V2 CI",
+                  icon_url: "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
+                }
+              }]
+            }' | curl -sf -X POST "$WEBHOOK" -H "Content-Type: application/json" -d @-

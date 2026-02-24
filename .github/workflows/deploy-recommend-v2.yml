@@ -1,0 +1,181 @@
+name: AI RECOMMEND V2 Manual Deploy
+run-name: AI RECOMMEND V2 Deploy • ${{ inputs.image_tag }} (${{ inputs.action }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "배포 액션"
+        required: true
+        type: choice
+        options:
+          - deploy
+          - rollback
+      image_tag:
+        description: "이미지 태그 (예: sha-abc1234)"
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+
+concurrency:
+  group: recommend-v2-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04-arm
+    environment: develop
+    env:
+      AWS_REGION: ap-northeast-2
+      IMAGE_TAG: ${{ inputs.image_tag }}
+      COMPOSE_DIR: /home/ubuntu/recommend
+
+    steps:
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify image exists in ECR
+        run: |
+          aws ecr describe-images \
+            --repository-name moyeobab/recommend \
+            --image-ids imageTag=${{ env.IMAGE_TAG }} \
+            --query 'imageDetails[0].imagePushedAt' --output text
+          echo "Image ${{ env.IMAGE_TAG }} confirmed"
+
+      - name: Deploy via SSM Send Command
+        id: ssm-deploy
+        run: |
+          COMMAND_ID=$(aws ssm send-command \
+            --targets "Key=tag:Service,Values=recommend" "Key=tag:Environment,Values=dev" \
+            --document-name "AWS-RunShellScript" \
+            --comment "${{ inputs.action }} recommend ${{ env.IMAGE_TAG }}" \
+            --timeout-seconds 300 \
+            --max-concurrency "1" \
+            --max-errors "0" \
+            --parameters commands='[
+              "set -e",
+              "REGION='"${{ env.AWS_REGION }}"'",
+              "IMAGE_TAG='"${{ env.IMAGE_TAG }}"'",
+              "COMPOSE_DIR='"${{ env.COMPOSE_DIR }}"'",
+              "",
+              "# ECR login",
+              "ECR_REGISTRY=$(aws sts get-caller-identity --query Account --output text).dkr.ecr.${REGION}.amazonaws.com",
+              "aws ecr get-login-password --region ${REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}",
+              "",
+              "# Parameter Store → .env",
+              "> ${COMPOSE_DIR}/.env",
+              "for param in PG_HOST PG_PORT PG_USER PG_PASSWORD PG_DB; do",
+              "  val=$(aws ssm get-parameter --name /moyeobab/recommend/dev/${param} --with-decryption --query \"Parameter.Value\" --output text --region ${REGION})",
+              "  echo \"${param}=${val}\" >> ${COMPOSE_DIR}/.env",
+              "done",
+              "echo \"ECR_REGISTRY=${ECR_REGISTRY}\" >> ${COMPOSE_DIR}/.env",
+              "echo \"IMAGE_TAG=${IMAGE_TAG}\" >> ${COMPOSE_DIR}/.env",
+              "",
+              "# Deploy",
+              "cd ${COMPOSE_DIR} && docker compose pull && docker compose up -d",
+              "",
+              "# Health check",
+              "sleep 5",
+              "if curl -sf --retry 8 --retry-delay 3 http://localhost:8000/health; then",
+              "  echo \"Health check passed\"",
+              "  docker image prune -f",
+              "  exit 0",
+              "fi",
+              "",
+              "echo \"Health check failed\"",
+              "exit 1"
+            ]' \
+            --query "Command.CommandId" --output text)
+
+          echo "command_id=$COMMAND_ID" >> "$GITHUB_OUTPUT"
+          echo "Command ID: $COMMAND_ID"
+
+      - name: Wait for deployment result
+        id: wait-result
+        run: |
+          COMMAND_ID="${{ steps.ssm-deploy.outputs.command_id }}"
+
+          sleep 5
+          INSTANCE_IDS=$(aws ssm list-command-invocations \
+            --command-id "$COMMAND_ID" \
+            --query "CommandInvocations[*].InstanceId" \
+            --output text)
+
+          ALL_SUCCESS=true
+          for INSTANCE_ID in $INSTANCE_IDS; do
+            echo "Waiting for $INSTANCE_ID..."
+            for i in $(seq 1 60); do
+              STATUS=$(aws ssm get-command-invocation \
+                --command-id "$COMMAND_ID" \
+                --instance-id "$INSTANCE_ID" \
+                --query "Status" --output text 2>/dev/null || echo "Pending")
+
+              if [ "$STATUS" = "Success" ]; then
+                echo "$INSTANCE_ID: Success"
+                break
+              elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then
+                echo "$INSTANCE_ID: $STATUS"
+                aws ssm get-command-invocation \
+                  --command-id "$COMMAND_ID" \
+                  --instance-id "$INSTANCE_ID" \
+                  --query "StandardErrorContent" --output text || true
+                ALL_SUCCESS=false
+                break
+              fi
+              sleep 5
+            done
+          done
+
+          if [ "$ALL_SUCCESS" = "true" ]; then
+            echo "result=success" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=failure" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+      - name: Notify Discord
+        if: always()
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            TITLE="AI Recommend V2 수동 ${{ inputs.action }} 성공"
+            DESC="\`${{ env.IMAGE_TAG }}\` ${{ inputs.action }} 완료"
+            COLOR=3066993
+          else
+            TITLE="AI Recommend V2 수동 ${{ inputs.action }} 실패"
+            DESC="\`${{ env.IMAGE_TAG }}\` ${{ inputs.action }} 실패"
+            COLOR=15158332
+          fi
+
+          jq -n \
+            --arg title "$TITLE" \
+            --arg desc "$DESC" \
+            --arg color "$COLOR" \
+            --arg actor "${{ github.actor }}" \
+            --arg tag "${{ env.IMAGE_TAG }}" \
+            --arg action "${{ inputs.action }}" \
+            --arg url "$RUN_URL" \
+            '{
+              embeds: [{
+                title: $title,
+                description: $desc,
+                color: ($color | tonumber),
+                fields: [
+                  {name: "실행자", value: $actor, inline: true},
+                  {name: "액션", value: $action, inline: true},
+                  {name: "이미지 태그", value: ("`" + $tag + "`"), inline: true},
+                  {name: "상세", value: ("[Actions 로그](" + $url + ")"), inline: false}
+                ],
+                footer: {
+                  text: "AI Recommend V2 Manual Deploy",
+                  icon_url: "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
+                }
+              }]
+            }' | curl -sf -X POST "$WEBHOOK" -H "Content-Type: application/json" -d @-
