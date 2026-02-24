@@ -2,6 +2,7 @@
 fastapi
 uvicorn[standard]
 
+
 # Database (PostgreSQL)
 psycopg2-binary
 
