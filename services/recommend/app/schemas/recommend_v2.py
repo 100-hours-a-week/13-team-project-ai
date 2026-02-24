@@ -52,23 +52,25 @@ class Preferences(BaseModel):
     dislike: Dict[Category9, CategoryScore] = Field(default_factory=dict)
 
 
-class Meta(BaseModel):
-    seed: Optional[int] = None
-    limit_bbox: Optional[int] = None
-
+class Exclude(BaseModel):
+    meat: bool = Field(False, description="고깃집 제외 (True → '고기' 제외)")
+    bar: bool = Field(False, description="술집 제외 (True → '기타' 제외)")
+ 
 
 class MeetupRequest(BaseModel):
-    user_id: int = Field(..., ge=1)
-    request_id: str
+
+    user_id: int = Field(..., ge=1, description="유저 ID (>=1)")
+    request_id: str = Field(..., min_length=1, description="요청 ID")
+
     meeting: Meeting
     location: Location
     swipe: Swipe
-    filters: Filters = Field(default_factory=Filters)
-    preferences: Preferences
 
-    seed: Optional[int] = None
-    limit_bbox: Optional[int] = None
-    meta: Optional[Meta] = None
+    preferences: Preferences = Field(default_factory=Preferences)
+
+    exclude: Exclude = Field(default_factory=Exclude)
+
+
 
 
 # =========================
@@ -78,10 +80,9 @@ class MeetupRequest(BaseModel):
 class RecoItem(BaseModel):
 
     rank: int = Field(..., ge=1)
-
-    store_id: Any
-    distance_m: float = Field(..., ge=0, description="거리 (meter)")
-    final_score: float = Field(..., ge=0.0, le=1.0)
+    store_id: str
+    distance_m: int = Field(..., ge=0)
+    final_score: float
 
 
 # =========================
@@ -108,9 +109,36 @@ class FallbackInfo(BaseModel):
 # Response
 # =========================
 
+
 class RecoResponse(BaseModel):
     request_id: str
     user_id: int
     top_n: int
     restaurants: List[RecoItem]
-    created_at: datetime
+    created_at: str  # ISO8601 string
+
+# =========================
+# Error Response (V2)
+# =========================
+
+class ErrorDetail(BaseModel):
+    loc: List[Any]
+    msg: str
+    type: str
+
+
+class ErrorResponse(BaseModel):
+    detail: str
+
+
+class ErrorResponseWithCode(BaseModel):
+    code: str
+    detail: str
+
+
+class InternalServerErrorResponse(BaseModel):
+    detail: str = Field("Internal Server Error", description="서버 내부 오류")
+
+
+class ValidationErrorResponse(BaseModel):
+    detail: List[ErrorDetail]

@@ -6,7 +6,7 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-*/.ipynb_checkpoints/
+
 # =========================
 # Virtualenv / Env
 # =========================
@@ -76,10 +76,6 @@ runs/
 # =========================
 .coverage
 htmlcov/
+test/
+services/recommend/test_v2_api.py
 
-# =========================
-# Frontend (있을 경우)
-# =========================
-node_modules/
-dist/
-build/
