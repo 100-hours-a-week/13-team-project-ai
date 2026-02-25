@@ -51,7 +51,7 @@ jobs:
             --max-concurrency "1" \
             --max-errors "0" \
             --parameters commands='[
-              "set -e",
+              "set -euo pipefail",
               "REGION='"${{ env.AWS_REGION }}"'",
               "IMAGE_TAG='"${{ env.IMAGE_TAG }}"'",
               "COMPOSE_DIR='"${{ env.COMPOSE_DIR }}"'",
@@ -63,11 +63,14 @@ jobs:
               "",
               "# 현재 이미지 태그 백업 (롤백용)",
               "PREV_IMAGE=$(docker inspect --format={{.Config.Image}} $(docker compose -f ${COMPOSE_DIR}/docker-compose.yml ps -q app) 2>/dev/null || echo \"\")",
-              "echo \"Current image: ${PREV_IMAGE}\"",
+              "echo \"[INFO] Current image: ${PREV_IMAGE}\"",
+              "echo \"[INFO] Target image tag: ${IMAGE_TAG}\"",
               "",
               "# ECR login",
               "ECR_REGISTRY=$(aws sts get-caller-identity --query Account --output text).dkr.ecr.${REGION}.amazonaws.com",
               "aws ecr get-login-password --region ${REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}",
+              "EXPECTED_IMAGE=${ECR_REGISTRY}/moyeobab/${DEPLOY_ENV}/recommend:${IMAGE_TAG}",
+              "echo \"[INFO] Expected image: ${EXPECTED_IMAGE}\"",
               "",
               "# Parameter Store → .env",
               "> ${COMPOSE_DIR}/.env",
@@ -79,43 +82,67 @@ jobs:
               "echo \"IMAGE_TAG=${IMAGE_TAG}\" >> ${COMPOSE_DIR}/.env",
               "echo \"ENV=${DEPLOY_ENV}\" >> ${COMPOSE_DIR}/.env",
               "",
-              "# Deploy",
-              "cd ${COMPOSE_DIR} && docker compose pull && docker compose up -d",
+              "# Deploy (app 서비스만 명시적으로 pull + recreate)",
+              "cd ${COMPOSE_DIR}",
+              "docker compose pull app",
+              "docker compose up -d app",
+              "docker compose up -d",
+              "",
+              "# 이미지 태그 검증 (컨테이너가 기대한 이미지로 실행 중인지 확인)",
+              "sleep 3",
+              "RUNNING_IMAGE=$(docker inspect --format={{.Config.Image}} $(docker compose ps -q app) 2>/dev/null || echo \"\")",
+              "echo \"[INFO] Running image: ${RUNNING_IMAGE}\"",
+              "if [ \"${RUNNING_IMAGE}\" != \"${EXPECTED_IMAGE}\" ]; then",
+              "  echo \"[FAIL] Image mismatch! Expected: ${EXPECTED_IMAGE}, Running: ${RUNNING_IMAGE}\"",
+              "  echo \"[FAIL] docker compose pull 또는 up이 새 이미지를 반영하지 못했습니다.\"",
+              "  # 롤백",
+              "  if [ -n \"${PREV_IMAGE}\" ]; then",
+              "    echo \"[ROLLBACK] Reverting to ${PREV_IMAGE}\"",
+              "    PREV_TAG=${PREV_IMAGE##*:}",
+              "    sed -i \"s/IMAGE_TAG=.*/IMAGE_TAG=${PREV_TAG}/\" ${COMPOSE_DIR}/.env",
+              "    docker compose up -d app",
+              "    sleep 3",
+              "    curl -sf http://localhost:8000/health && echo \"[ROLLBACK] Health check passed\" || echo \"[ROLLBACK] Health check also failed\"",
+              "  fi",
+              "  exit 1",
+              "fi",
               "",
               "# Health check (최대 2분: 40회 x 3초)",
-              "sleep 5",
+              "echo \"[INFO] Image verified, starting health check...\"",
               "HEALTH_OK=false",
               "for i in $(seq 1 40); do",
               "  if curl -sf http://localhost:8000/health; then",
-              "    echo \"Health check passed (attempt ${i}/40)\"",
+              "    echo \"[OK] Health check passed (attempt ${i}/40)\"",
               "    HEALTH_OK=true",
               "    break",
               "  fi",
-              "  echo \"Health check attempt ${i}/40 failed, retrying in 3s...\"",
+              "  echo \"[WAIT] Health check attempt ${i}/40 failed, retrying in 3s...\"",
               "  sleep 3",
               "done",
               "",
               "if [ \"${HEALTH_OK}\" = \"true\" ]; then",
               "  docker image prune -f",
+              "  echo \"[SUCCESS] Deploy complete: ${EXPECTED_IMAGE}\"",
               "  exit 0",
               "fi",
               "",
               "# Rollback on health check failure",
-              "echo \"ROLLBACK: health check failed, reverting to ${PREV_IMAGE}\"",
+              "echo \"[FAIL] Health check failed after 40 attempts\"",
               "if [ -n \"${PREV_IMAGE}\" ]; then",
+              "  echo \"[ROLLBACK] Reverting to ${PREV_IMAGE}\"",
               "  PREV_TAG=${PREV_IMAGE##*:}",
               "  sed -i \"s/IMAGE_TAG=.*/IMAGE_TAG=${PREV_TAG}/\" ${COMPOSE_DIR}/.env",
-              "  cd ${COMPOSE_DIR} && docker compose up -d",
+              "  docker compose up -d app",
               "  sleep 5",
               "  for i in $(seq 1 20); do",
               "    if curl -sf http://localhost:8000/health; then",
-              "      echo \"Rollback health check passed (attempt ${i}/20)\"",
+              "      echo \"[ROLLBACK] Health check passed (attempt ${i}/20)\"",
               "      break",
               "    fi",
-              "    echo \"Rollback health check attempt ${i}/20 failed, retrying in 3s...\"",
+              "    echo \"[ROLLBACK] Health check attempt ${i}/20 failed, retrying in 3s...\"",
               "    sleep 3",
               "  done",
-              "  curl -sf http://localhost:8000/health && echo \"Rollback succeeded\" || echo \"Rollback also failed\"",
+              "  curl -sf http://localhost:8000/health && echo \"[ROLLBACK] Succeeded\" || echo \"[ROLLBACK] Also failed\"",
               "fi",
               "exit 1"
             ]' \
@@ -128,17 +155,35 @@ jobs:
         id: wait-result
         run: |
           COMMAND_ID="${{ steps.ssm-deploy.outputs.command_id }}"
+          echo "Command ID: $COMMAND_ID"
 
-          # SSM 타겟 인스턴스 ID 조회
-          sleep 5
-          INSTANCE_IDS=$(aws ssm list-command-invocations \
-            --command-id "$COMMAND_ID" \
-            --query "CommandInvocations[*].InstanceId" \
-            --output text)
+          # SSM 타겟 인스턴스 ID 조회 (최대 30초 대기)
+          INSTANCE_IDS=""
+          for attempt in $(seq 1 6); do
+            sleep 5
+            INSTANCE_IDS=$(aws ssm list-command-invocations \
+              --command-id "$COMMAND_ID" \
+              --query "CommandInvocations[*].InstanceId" \
+              --output text)
+            if [ -n "$INSTANCE_IDS" ]; then
+              break
+            fi
+            echo "Waiting for SSM targets... (attempt $attempt/6)"
+          done
+
+          # 타겟 인스턴스 0대 체크
+          if [ -z "$INSTANCE_IDS" ]; then
+            echo "::error::SSM 타겟 인스턴스가 없습니다. tag:Service=recommend, tag:Environment=${{ env.DEPLOY_ENV }} 에 매칭되는 인스턴스를 확인하세요."
+            echo "result=no-targets" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          INSTANCE_COUNT=$(echo "$INSTANCE_IDS" | wc -w | tr -d ' ')
+          echo "Target instances ($INSTANCE_COUNT): $INSTANCE_IDS"
 
           ALL_SUCCESS=true
           for INSTANCE_ID in $INSTANCE_IDS; do
-            echo "Waiting for $INSTANCE_ID..."
+            echo "--- Waiting for $INSTANCE_ID ---"
             for i in $(seq 1 60); do
               STATUS=$(aws ssm get-command-invocation \
                 --command-id "$COMMAND_ID" \
@@ -147,9 +192,20 @@ jobs:
 
               if [ "$STATUS" = "Success" ]; then
                 echo "$INSTANCE_ID: Success"
+                # 성공 시에도 stdout 출력 (이미지 검증 결과 확인용)
+                aws ssm get-command-invocation \
+                  --command-id "$COMMAND_ID" \
+                  --instance-id "$INSTANCE_ID" \
+                  --query "StandardOutputContent" --output text 2>/dev/null | tail -5 || true
                 break
               elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then
-                echo "$INSTANCE_ID: $STATUS"
+                echo "::error::$INSTANCE_ID: $STATUS"
+                echo "--- stdout ---"
+                aws ssm get-command-invocation \
+                  --command-id "$COMMAND_ID" \
+                  --instance-id "$INSTANCE_ID" \
+                  --query "StandardOutputContent" --output text 2>/dev/null | tail -20 || true
+                echo "--- stderr ---"
                 aws ssm get-command-invocation \
                   --command-id "$COMMAND_ID" \
                   --instance-id "$INSTANCE_ID" \
