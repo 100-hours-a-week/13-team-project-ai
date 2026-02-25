@@ -29,7 +29,8 @@ app = FastAPI(
 # -------------------------
 # V2 (Permanent)
 # -------------------------
-app.include_router(recommend_v2_router, prefix="/api/v2")
+if v2_router:
+    app.include_router(v2_router, prefix="/api/v2")
 
 
 @app.get("/health")
