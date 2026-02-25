@@ -114,7 +114,7 @@ jobs:
       - name: Notify Discord
         if: always()
         env:
-          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_CI }}
           BRANCH: ${{ github.ref_name }}
           RUN_NUM: ${{ github.run_number }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
