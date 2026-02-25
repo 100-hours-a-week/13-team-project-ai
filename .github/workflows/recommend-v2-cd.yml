@@ -18,11 +18,12 @@ jobs:
   deploy:
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
     runs-on: ubuntu-24.04-arm
-    environment: develop
+    environment: ${{ github.event.workflow_run.head_branch == 'main' && 'production' || 'develop' }}
     env:
       AWS_REGION: ap-northeast-2
       IMAGE_TAG: sha-${{ github.event.workflow_run.head_sha }}
       COMPOSE_DIR: /home/ubuntu/recommend
+      DEPLOY_ENV: ${{ github.event.workflow_run.head_branch == 'main' && 'prod' || 'dev' }}
 
     steps:
       - name: Checkout
@@ -37,13 +38,13 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Sync config to S3
-        run: aws s3 sync services/recommend/docker/ s3://moyeobab-dev-config/recommend/ --delete
+        run: aws s3 sync services/recommend/docker/ s3://moyeobab-${{ env.DEPLOY_ENV }}-config/recommend/ --delete
 
       - name: Deploy via SSM Send Command
         id: ssm-deploy
         run: |
           COMMAND_ID=$(aws ssm send-command \
-            --targets "Key=tag:Service,Values=recommend" "Key=tag:Environment,Values=dev" \
+            --targets "Key=tag:Service,Values=recommend" "Key=tag:Environment,Values=${{ env.DEPLOY_ENV }}" \
             --document-name "AWS-RunShellScript" \
             --comment "Deploy recommend ${{ env.IMAGE_TAG }}" \
             --timeout-seconds 300 \
@@ -54,10 +55,11 @@ jobs:
               "REGION='"${{ env.AWS_REGION }}"'",
               "IMAGE_TAG='"${{ env.IMAGE_TAG }}"'",
               "COMPOSE_DIR='"${{ env.COMPOSE_DIR }}"'",
+              "DEPLOY_ENV='"${{ env.DEPLOY_ENV }}"'",
               "",
               "# S3에서 배포 설정 파일 동기화 (docker-compose, promtail)",
               "mkdir -p ${COMPOSE_DIR}",
-              "aws s3 sync s3://moyeobab-dev-config/recommend/ ${COMPOSE_DIR}/ --exclude '.env' --region ${REGION}",
+              "aws s3 sync s3://moyeobab-${DEPLOY_ENV}-config/recommend/ ${COMPOSE_DIR}/ --exclude '.env' --region ${REGION}",
               "",
               "# 현재 이미지 태그 백업 (롤백용)",
               "PREV_IMAGE=$(docker inspect --format={{.Config.Image}} $(docker compose -f ${COMPOSE_DIR}/docker-compose.yml ps -q app) 2>/dev/null || echo \"\")",
@@ -70,11 +72,12 @@ jobs:
               "# Parameter Store → .env",
               "> ${COMPOSE_DIR}/.env",
               "for param in PG_HOST PG_PORT PG_USER PG_PASSWORD PG_DB; do",
-              "  val=$(aws ssm get-parameter --name /moyeobab/recommend/dev/${param} --with-decryption --query \"Parameter.Value\" --output text --region ${REGION})",
+              "  val=$(aws ssm get-parameter --name /moyeobab/recommend/${DEPLOY_ENV}/${param} --with-decryption --query \"Parameter.Value\" --output text --region ${REGION})",
               "  echo \"${param}=${val}\" >> ${COMPOSE_DIR}/.env",
               "done",
               "echo \"ECR_REGISTRY=${ECR_REGISTRY}\" >> ${COMPOSE_DIR}/.env",
               "echo \"IMAGE_TAG=${IMAGE_TAG}\" >> ${COMPOSE_DIR}/.env",
+              "echo \"ENV=${DEPLOY_ENV}\" >> ${COMPOSE_DIR}/.env",
               "",
               "# Deploy",
               "cd ${COMPOSE_DIR} && docker compose pull && docker compose up -d",

@@ -55,7 +55,7 @@ jobs:
       - name: Verify image exists in ECR
         run: |
           aws ecr describe-images \
-            --repository-name moyeobab/recommend \
+            --repository-name moyeobab/${{ env.DEPLOY_ENV }}/recommend \
             --image-ids imageTag=${{ env.IMAGE_TAG }} \
             --query 'imageDetails[0].imagePushedAt' --output text
           echo "Image ${{ env.IMAGE_TAG }} confirmed"
@@ -93,6 +93,7 @@ jobs:
               "done",
               "echo \"ECR_REGISTRY=${ECR_REGISTRY}\" >> ${COMPOSE_DIR}/.env",
               "echo \"IMAGE_TAG=${IMAGE_TAG}\" >> ${COMPOSE_DIR}/.env",
+              "echo \"ENV=${DEPLOY_ENV}\" >> ${COMPOSE_DIR}/.env",
               "",
               "# Deploy",
               "cd ${COMPOSE_DIR} && docker compose pull && docker compose up -d",
