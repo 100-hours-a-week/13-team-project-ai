@@ -1,5 +1,5 @@
 name: AI RECOMMEND V2 CD Pipeline
-run-name: AI RECOMMEND V2 CD • ${{ github.event.workflow_run.head_sha }}
+run-name: AI RECOMMEND V2 CD • sha-${{ github.event.workflow_run.head_sha }}
 
 on:
   workflow_run:
