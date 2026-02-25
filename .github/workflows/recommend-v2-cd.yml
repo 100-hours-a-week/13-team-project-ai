@@ -227,20 +227,29 @@ jobs:
       - name: Notify Discord
         if: always()
         env:
-          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_CD }}
+          DEPLOY_ENV: ${{ env.DEPLOY_ENV }}
           BRANCH: ${{ github.event.workflow_run.head_branch }}
           AUTHOR: ${{ github.event.workflow_run.head_commit.author.name }}
           COMMIT_MSG: ${{ github.event.workflow_run.head_commit.message }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          ENV_UPPER=$(echo "$DEPLOY_ENV" | tr '[:lower:]' '[:upper:]')
           RESULT="${{ steps.wait-result.outputs.result }}"
+
           if [ "${{ job.status }}" = "success" ]; then
-            TITLE="AI Recommend V2 배포 성공"
+            TITLE="[${ENV_UPPER}] AI Recommend 배포 성공"
             DESC="EC2에 \`${{ env.IMAGE_TAG }}\` 배포 완료"
             COLOR=3066993
           else
-            TITLE="AI Recommend V2 배포 실패"
-            DESC="배포에 실패했습니다. 자동 롤백이 시도되었을 수 있습니다."
+            TITLE="[${ENV_UPPER}] AI Recommend 배포 실패"
+            if [ "$RESULT" = "no-targets" ]; then
+              DESC="SSM 타겟 인스턴스가 없습니다 (tag:Service=recommend, tag:Environment=${DEPLOY_ENV})"
+            elif [ "$RESULT" = "failure" ]; then
+              DESC="EC2 배포 스크립트 실패 — 이전 버전으로 롤백 시도됨. Actions 로그에서 롤백 결과를 확인하세요"
+            else
+              DESC="배포 실패 — Actions 로그를 확인하세요"
+            fi
             COLOR=15158332
           fi
 
@@ -248,6 +257,7 @@ jobs:
             --arg title "$TITLE" \
             --arg desc "$DESC" \
             --arg color "$COLOR" \
+            --arg env_label "$ENV_UPPER" \
             --arg branch "$BRANCH" \
             --arg author "$AUTHOR" \
             --arg msg "$COMMIT_MSG" \
@@ -259,15 +269,15 @@ jobs:
                 description: $desc,
                 color: ($color | tonumber),
                 fields: [
+                  {name: "환경", value: $env_label, inline: true},
                   {name: "브랜치", value: $branch, inline: true},
                   {name: "작성자", value: $author, inline: true},
-                  {name: "이미지 태그", value: ("`" + $tag + "`"), inline: true},
+                  {name: "버전", value: ("`" + $tag + "`"), inline: true},
                   {name: "커밋", value: $msg, inline: false},
                   {name: "상세", value: ("[Actions 로그](" + $url + ")"), inline: false}
                 ],
                 footer: {
-                  text: "AI Recommend V2 CD",
-                  icon_url: "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
+                  text: "AI Recommend CD"
                 }
               }]
             }' | curl -sf -X POST "$WEBHOOK" -H "Content-Type: application/json" -d @-
