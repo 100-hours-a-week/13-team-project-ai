@@ -18,4 +18,4 @@ class Settings(BaseSettings):
     DB_MAX_OVERFLOW: int = 10
 
 
-settings = Settings()
+settings = Settings()  # type: ignore

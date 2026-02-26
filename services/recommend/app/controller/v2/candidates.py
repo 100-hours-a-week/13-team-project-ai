@@ -162,11 +162,11 @@ def top3_categories(
     total_like = sum(int(v[0]) for v in like_dislike.values())
 
     for c, (L, D) in like_dislike.items():
-        l = int(L)
+        like_val = int(L)
         if total_like <= 0:
             scores[c] = 1.0 / len(CATEGORIES_9)
         else:
-            scores[c] = (l + params.alpha_top3) / (total_like + params.alpha_top3 * len(CATEGORIES_9))
+            scores[c] = (like_val + params.alpha_top3) / (total_like + params.alpha_top3 * len(CATEGORIES_9))
 
     top3 = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)[:3]
     top3 = [c for c in top3 if scores[c] > 0]
@@ -367,7 +367,7 @@ def generate_candidates(
     rng = random.Random(seed)
 
     hard_banned = set(excluded_categories or set())
-    soft_banned = set()
+    soft_banned: Set[str] = set()
 
     cand: List[Dict[str, Any]] = []
     used_type = "none"
@@ -416,16 +416,16 @@ def generate_candidates(
             used_type = "relaxed"
 
     out: List[Dict[str, Any]] = []
-    for r in cand:
+    for cand_item in cand:
         out.append({
-            "place_id": r.get("place_id"),
-            "name": r.get("name"),
-            "category": r.get("category"),
-            "dist_m": float(r.get("dist_m", 0.0)),
-            "bin": int(r.get("bin", -1)),
-            "review_score": float(r.get("review_score", 0.0)),
-            "visitor_reviews": int(r.get("visitor_reviews", 0)),
-            "blog_reviews": int(r.get("blog_reviews", 0)),
+            "place_id": cand_item.get("place_id"),
+            "name": cand_item.get("name"),
+            "category": cand_item.get("category"),
+            "dist_m": float(cand_item.get("dist_m", 0.0)),
+            "bin": int(cand_item.get("bin", -1)),
+            "review_score": float(cand_item.get("review_score", 0.0)),
+            "visitor_reviews": int(cand_item.get("visitor_reviews", 0)),
+            "blog_reviews": int(cand_item.get("blog_reviews", 0)),
         })
 
     fallback_meta = {

@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple, Literal, Annotated
+from typing import Any, Dict, List, Literal, Annotated
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -53,8 +53,8 @@ class Preferences(BaseModel):
 
 
 class Exclude(BaseModel):
-    meat: bool = Field(False, description="고깃집 제외 (True → '고기' 제외)")
-    bar: bool = Field(False, description="술집 제외 (True → '기타' 제외)")
+    meat: bool = Field(default=False, description="고깃집 제외 (True → '고기' 제외)")
+    bar: bool = Field(default=False, description="술집 제외 (True → '기타' 제외)")
  
 
 class MeetupRequest(BaseModel):
@@ -68,7 +68,7 @@ class MeetupRequest(BaseModel):
 
     preferences: Preferences = Field(default_factory=Preferences)
 
-    exclude: Exclude = Field(default_factory=Exclude)
+    exclude: Exclude = Field(default_factory=lambda: Exclude())
 
 
 

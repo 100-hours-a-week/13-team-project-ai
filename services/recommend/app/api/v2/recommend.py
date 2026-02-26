@@ -1,4 +1,4 @@
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Mapping, Any
 from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -20,8 +20,8 @@ router = APIRouter(prefix="/recommendations", tags=["recommend-v2"])
 
 
 def build_like_dislike(
-    likes: Dict[str, int],
-    dislikes: Dict[str, int],
+    likes: Mapping[Any, int],
+    dislikes: Mapping[Any, int],
 ) -> Dict[str, Tuple[int, int]]:
     """
     Build category -> (like, dislike) dict for all 9 categories.
@@ -89,7 +89,7 @@ def recommend(payload: MeetupRequest, db: Session = Depends(get_db)) -> RecoResp
         meetup_lat=payload.location.lat,
         meetup_lng=payload.location.lng,
         R_m=payload.location.radius_m,
-        K=return_n,  # ✅ 2x cards
+        K=return_n,  
         N_people=int(payload.meeting.headcount),
         like_dislike=like_dislike,
         params=cand_params,
@@ -105,7 +105,7 @@ def recommend(payload: MeetupRequest, db: Session = Depends(get_db)) -> RecoResp
         like_dislike=like_dislike,
         N_people=int(payload.meeting.headcount),
         R_m=to_float(fallback_meta.get("final_radius_m"), to_float(payload.location.radius_m)),
-        top_n=return_n,  # ✅ 2x cards
+        top_n=return_n,  
         weights=V1Weights(),
         params=V1Params(seed=seed),
     )
@@ -134,7 +134,7 @@ def recommend(payload: MeetupRequest, db: Session = Depends(get_db)) -> RecoResp
     return RecoResponse(
         request_id=payload.request_id,
         user_id=int(payload.user_id),
-        top_n=top_n,                         # requested
-        restaurants=restaurants[:return_n],  # ✅ 2x
+        top_n=top_n,                         
+        restaurants=restaurants[:return_n],  
         created_at=datetime.now(tz=KST).isoformat(),
     )

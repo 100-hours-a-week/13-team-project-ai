@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-import os
 import uvicorn
-
-from fastapi import FastAPI
-#from prometheus_fastapi_instrumentator import Instrumentator
-from app.api.v1.recommend_router import router as recommendation_router
+from typing import Optional
+from fastapi import FastAPI, APIRouter
 
 # v2 router (존재하면 include)
+v2_router: Optional[APIRouter]
 try:
     from app.api.v2.recommend import router as v2_router
-except Exception:
+except ImportError:
     v2_router = None
 
 app = FastAPI(
