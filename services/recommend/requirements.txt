@@ -4,10 +4,12 @@ uvicorn[standard]
 
 
 # Database (PostgreSQL)
-psycopg2-binary
+psycopg[binary]
+sqlalchemy
 
 # Configuration & Environment
 python-dotenv
+pydantic-settings
 
 # Data Validation
 pydantic

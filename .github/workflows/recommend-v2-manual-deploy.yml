@@ -1,5 +1,5 @@
 name: AI RECOMMEND V2 Manual Deploy
-run-name: AI RECOMMEND V2 Deploy • ${{ inputs.image_tag }} (${{ inputs.action }})
+run-name: AI RECOMMEND V2 Deploy • ${{ inputs.image_tag }} (${{ inputs.action }}) [${{ inputs.environment }}]
 
 on:
   workflow_dispatch:
@@ -15,34 +15,47 @@ on:
         description: "이미지 태그 (예: sha-abc1234)"
         required: true
         type: string
+      environment:
+        description: "배포 환경"
+        required: true
+        default: dev
+        type: choice
+        options: [dev, prod]
 
 permissions:
   id-token: write
 
 concurrency:
-  group: recommend-v2-deploy
+  group: recommend-v2-deploy-${{ inputs.environment }}
   cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: ubuntu-24.04-arm
-    environment: develop
+    environment: ${{ inputs.environment == 'prod' && 'production' || 'develop' }}
     env:
       AWS_REGION: ap-northeast-2
       IMAGE_TAG: ${{ inputs.image_tag }}
       COMPOSE_DIR: /home/ubuntu/recommend
+      DEPLOY_ENV: ${{ inputs.environment }}
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Configure AWS Credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Sync config to S3
+        run: aws s3 sync services/recommend/docker/ s3://moyeobab-${{ env.DEPLOY_ENV }}-config/recommend/ --delete
+
       - name: Verify image exists in ECR
         run: |
           aws ecr describe-images \
-            --repository-name moyeobab/recommend \
+            --repository-name moyeobab/${{ env.DEPLOY_ENV }}/recommend \
             --image-ids imageTag=${{ env.IMAGE_TAG }} \
             --query 'imageDetails[0].imagePushedAt' --output text
           echo "Image ${{ env.IMAGE_TAG }} confirmed"
@@ -51,7 +64,7 @@ jobs:
         id: ssm-deploy
         run: |
           COMMAND_ID=$(aws ssm send-command \
-            --targets "Key=tag:Service,Values=recommend" "Key=tag:Environment,Values=dev" \
+            --targets "Key=tag:Service,Values=recommend" "Key=tag:Environment,Values=${{ env.DEPLOY_ENV }}" \
             --document-name "AWS-RunShellScript" \
             --comment "${{ inputs.action }} recommend ${{ env.IMAGE_TAG }}" \
             --timeout-seconds 300 \
@@ -62,6 +75,11 @@ jobs:
               "REGION='"${{ env.AWS_REGION }}"'",
               "IMAGE_TAG='"${{ env.IMAGE_TAG }}"'",
               "COMPOSE_DIR='"${{ env.COMPOSE_DIR }}"'",
+              "DEPLOY_ENV='"${{ env.DEPLOY_ENV }}"'",
+              "",
+              "# S3에서 배포 설정 파일 동기화",
+              "mkdir -p ${COMPOSE_DIR}",
+              "aws s3 sync s3://moyeobab-${DEPLOY_ENV}-config/recommend/ ${COMPOSE_DIR}/ --exclude '.env' --region ${REGION}",
               "",
               "# ECR login",
               "ECR_REGISTRY=$(aws sts get-caller-identity --query Account --output text).dkr.ecr.${REGION}.amazonaws.com",
@@ -70,24 +88,35 @@ jobs:
               "# Parameter Store → .env",
               "> ${COMPOSE_DIR}/.env",
               "for param in PG_HOST PG_PORT PG_USER PG_PASSWORD PG_DB; do",
-              "  val=$(aws ssm get-parameter --name /moyeobab/recommend/dev/${param} --with-decryption --query \"Parameter.Value\" --output text --region ${REGION})",
+              "  val=$(aws ssm get-parameter --name /moyeobab/recommend/${DEPLOY_ENV}/${param} --with-decryption --query \"Parameter.Value\" --output text --region ${REGION})",
               "  echo \"${param}=${val}\" >> ${COMPOSE_DIR}/.env",
               "done",
               "echo \"ECR_REGISTRY=${ECR_REGISTRY}\" >> ${COMPOSE_DIR}/.env",
               "echo \"IMAGE_TAG=${IMAGE_TAG}\" >> ${COMPOSE_DIR}/.env",
+              "echo \"ENV=${DEPLOY_ENV}\" >> ${COMPOSE_DIR}/.env",
               "",
               "# Deploy",
               "cd ${COMPOSE_DIR} && docker compose pull && docker compose up -d",
               "",
-              "# Health check",
+              "# Health check (최대 2분: 40회 x 3초)",
               "sleep 5",
-              "if curl -sf --retry 8 --retry-delay 3 http://localhost:8000/health; then",
-              "  echo \"Health check passed\"",
+              "HEALTH_OK=false",
+              "for i in $(seq 1 40); do",
+              "  if curl -sf http://localhost:8000/health; then",
+              "    echo \"Health check passed (attempt ${i}/40)\"",
+              "    HEALTH_OK=true",
+              "    break",
+              "  fi",
+              "  echo \"Health check attempt ${i}/40 failed, retrying in 3s...\"",
+              "  sleep 3",
+              "done",
+              "",
+              "if [ \"${HEALTH_OK}\" = \"true\" ]; then",
               "  docker image prune -f",
               "  exit 0",
               "fi",
               "",
-              "echo \"Health check failed\"",
+              "echo \"Health check failed after 40 attempts\"",
               "exit 1"
             ]' \
             --query "Command.CommandId" --output text)
@@ -141,7 +170,7 @@ jobs:
       - name: Notify Discord
         if: always()
         env:
-          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_CD }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           if [ "${{ job.status }}" = "success" ]; then
@@ -161,6 +190,7 @@ jobs:
             --arg actor "${{ github.actor }}" \
             --arg tag "${{ env.IMAGE_TAG }}" \
             --arg action "${{ inputs.action }}" \
+            --arg env "${{ env.DEPLOY_ENV }}" \
             --arg url "$RUN_URL" \
             '{
               embeds: [{
@@ -169,6 +199,7 @@ jobs:
                 color: ($color | tonumber),
                 fields: [
                   {name: "실행자", value: $actor, inline: true},
+                  {name: "환경", value: $env, inline: true},
                   {name: "액션", value: $action, inline: true},
                   {name: "이미지 태그", value: ("`" + $tag + "`"), inline: true},
                   {name: "상세", value: ("[Actions 로그](" + $url + ")"), inline: false}

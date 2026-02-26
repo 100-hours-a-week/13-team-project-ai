@@ -82,3 +82,12 @@ htmlcov/
 test/
 services/recommend/test_v2_api.py
 
+# =========================
+# Frontend (있을 경우)
+# =========================
+node_modules/
+dist/
+build/
+test
+test_v2_api.py
+
