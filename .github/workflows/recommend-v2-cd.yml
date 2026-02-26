@@ -51,7 +51,7 @@ jobs:
             --max-concurrency "1" \
             --max-errors "0" \
             --parameters commands='[
-              "set -euo pipefail",
+              "set -eu",
               "REGION='"${{ env.AWS_REGION }}"'",
               "IMAGE_TAG='"${{ env.IMAGE_TAG }}"'",
               "COMPOSE_DIR='"${{ env.COMPOSE_DIR }}"'",
