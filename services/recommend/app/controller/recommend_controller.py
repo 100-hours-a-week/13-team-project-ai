@@ -1,12 +1,14 @@
 import math
-from typing import List
+from typing import List, Dict, Any
+from psycopg2.extras import RealDictCursor
 
-def calculate_recommendations(db_conn, req):
-    cur = db_conn.cursor()
-    
-    likes = req.preferences.like
-    dislikes = req.preferences.dislike
-    
+def calculate_recommendations(db_conn, req) -> List[Dict[str, Any]]:
+    # ✅ dict row로 받기
+    cur = db_conn.cursor(cursor_factory=RealDictCursor)
+
+    likes = req.preferences.like or {}
+    dislikes = req.preferences.dislike or {}
+
     query = """
     SELECT 
         id, 
@@ -28,52 +30,52 @@ def calculate_recommendations(db_conn, req):
         )) <= %s
     ORDER BY distance_m
     """
-    
+
     params = (
         req.location.lat, req.location.lng, req.location.lat,
         req.location.lat, req.location.lng, req.location.lat,
         req.location.radius_m
     )
-    
+
     cur.execute(query, params)
     rows = cur.fetchall()
-    
+
     scored_list = []
     for row in rows:
         score = 0.0
-        
-        # 1. 리뷰 기반 신뢰도 점수 (로그 스케일)
-        visitor_rev = row['review_count_visitor'] or 0
-        blog_rev = row['review_count_blog'] or 0
+
+        visitor_rev = row.get("review_count_visitor") or 0
+        blog_rev = row.get("review_count_blog") or 0
         score += math.log10(visitor_rev + (blog_rev * 1.2) + 1) * 0.7
 
-        # 2. 선호도 가중치 적용
-        category_text = row['category_mapped'] or ""
-        
+        category_text = row.get("category_mapped") or ""
+
+        # ✅ 정확히 일치하는 카테고리면 == 로 매칭하는 게 안전
+        # (현재는 "한식" in "한식/분식" 같은 문자열 포함을 기대하는 듯)
         for cat, val in likes.items():
             if cat in category_text:
-                score += (val * 1.0)
-        
+                score += (int(val) * 1.0)
+
         for cat, val in dislikes.items():
             if cat in category_text:
-                score -= (val * 1.5)
+                score -= (int(val) * 1.5)
 
-        # 3. 거리 패널티
-        score -= (row['distance_m'] / 100) * 0.05
-                
-        # 응답 스키마(RecommendedRestaurant) 필드명에 맞춤
+        # distance_m이 NULL/NaN일 수 있어 방어
+        dist = row.get("distance_m")
+        dist = float(dist) if dist is not None else 0.0
+        score -= (dist / 100) * 0.05
+
         scored_list.append({
-            "id": row['id'],
-            "name": row['name'],
-            "category_mapped": category_text, 
-            "distance_m": int(row['distance_m']),
-            "final_score": round(max(0, score), 2)
+            "id": row.get("id"),
+            "name": row.get("name"),
+            "category_mapped": category_text,
+            "distance_m": int(dist),
+            "final_score": round(max(0.0, score), 2),
         })
-    
-    # 최종 점수순 정렬
-    scored_list.sort(key=lambda x: x['final_score'], reverse=True)
-    
-    # JSON 데이터에 있던 swipe.card_limit을 추천 개수로 활용
-    limit = req.swipe.card_limit if hasattr(req, 'swipe') else 10
-    limit = limit * 2
+
+    scored_list.sort(key=lambda x: x["final_score"], reverse=True)
+
+    limit = int(getattr(req.swipe, "card_limit", 10))
+    limit = min(max(limit, 2), 15)  # 2~15 안전 클램프
+    limit = limit * 2               # 기존 로직 유지
     return scored_list[:limit]
