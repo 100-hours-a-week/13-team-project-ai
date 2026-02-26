@@ -3,8 +3,7 @@ from datetime import datetime
 
 from app.controller.recommend_controller import calculate_recommendations
 from app.schemas.recommend_schema import RecommendRequest, RecommendResponse
-from app.database.connection import get_connection
-from app.metrics import empty_recommend_counter
+from app.database.connection import get_connection 
 
 router = APIRouter()
 
@@ -19,9 +18,6 @@ async def create_recommendations(request: RecommendRequest):
     try:
         # 추천 로직 실행
         results = calculate_recommendations(conn, request)
-
-        if not results:
-            empty_recommend_counter.inc()
         
         # 응답 데이터 구성
         response_data = {
