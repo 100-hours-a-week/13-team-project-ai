@@ -4,7 +4,7 @@ uvicorn[standard]
 
 
 # Database (PostgreSQL)
-psycopg[binary]
+psycopg2-binary
 sqlalchemy
 
 # Configuration & Environment
