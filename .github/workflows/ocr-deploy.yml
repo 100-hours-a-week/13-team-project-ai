@@ -3,6 +3,9 @@ name: Build and Deploy to RunPod
 on:
   push:
     branches: [main, develop]
+    paths:
+      - 'services/ocr/**'
+      - '.github/workflows/ocr-deploy.yml'
 
 permissions:
   packages: write
@@ -51,7 +54,7 @@ jobs:
           curl -X POST https://api.runpod.io/graphql?api_key=${{ secrets.RUNPOD_API_KEY }} \
           -H "Content-Type: application/json" \
           -d '{
-            "query": "mutation { updateTemplate(input: { id: \"'${{ env.TEMPLATE_ID }}'\", imageRepoName: \"'${{ env.REGISTRY }}'/'${{ env.OWNER }}'/'${{ env.IMAGE_NAME }}'\", imageTagName: \"'${{ env.IMAGE_TAG }}'\" }) { id imageTagName } }"
+            "query": "mutation { saveTemplate(input: { id: \"${{ env.TEMPLATE_ID }}\", imageRepoName: \"${{ env.REGISTRY }}/${{ env.OWNER }}/${{ env.IMAGE_NAME }}\", imageTagName: \"${{ env.IMAGE_TAG }}\" }) { id } }"
           }'
 
       - name: Restart RunPod Instance
@@ -59,5 +62,5 @@ jobs:
           curl -X POST https://api.runpod.io/graphql?api_key=${{ secrets.RUNPOD_API_KEY }} \
           -H "Content-Type: application/json" \
           -d '{
-            "query": "mutation { podReset(input: { podId: \"'${{ secrets.POD_ID }}'\" }) { id status } }"
+            "query": "mutation { podRestart(input: { podId: \"${{ secrets.POD_ID }}\" }) { id } }"
           }'
