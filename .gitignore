@@ -55,6 +55,8 @@ datasets/
 # =========================
 models/
 model/
+!models/model.pkl
+!models/model_meta.pkl
 weights/
 checkpoints/
 ckpt/
