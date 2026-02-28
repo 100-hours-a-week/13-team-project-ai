@@ -54,7 +54,7 @@ jobs:
           curl -X POST https://api.runpod.io/graphql?api_key=${{ secrets.RUNPOD_API_KEY }} \
           -H "Content-Type: application/json" \
           -d '{
-            "query": "mutation { saveTemplate(input: { id: \"${{ env.TEMPLATE_ID }}\", imageRepoName: \"${{ env.REGISTRY }}/${{ env.OWNER }}/${{ env.IMAGE_NAME }}\", imageTagName: \"${{ env.IMAGE_TAG }}\" }) { id } }"
+            "query": "mutation { saveTemplate(input: { id: \"${{ env.TEMPLATE_ID }}\", name: \"${{ env.IMAGE_NAME }}\", imageName: \"${{ env.REGISTRY }}/${{ env.OWNER }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}\", containerDiskInGb: 40, volumeInGb: 0, dockerArgs: \"\", env: [{key: \"VLLM_BASE_URL\", value: \"${{ secrets.VLLM_BASE_URL }}\"}, {key: \"VLLM_MODEL\", value: \"${{ secrets.VLLM_MODEL }}\"}, {key: \"VLLM_TIMEOUT\", value: \"${{ secrets.VLLM_TIMEOUT }}\"}] }) { id } }"
           }'
 
       - name: Restart RunPod Instance
@@ -62,5 +62,5 @@ jobs:
           curl -X POST https://api.runpod.io/graphql?api_key=${{ secrets.RUNPOD_API_KEY }} \
           -H "Content-Type: application/json" \
           -d '{
-            "query": "mutation { podRestart(input: { podId: \"${{ secrets.POD_ID }}\" }) { id } }"
+            "query": "mutation { podReset(input: { podId: \"${{ secrets.POD_ID }}\" }) { id } }"
           }'
