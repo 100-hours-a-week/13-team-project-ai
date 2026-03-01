@@ -22,16 +22,6 @@ services:
         max-size: "10m"
         max-file: "5"
 
-  qdrant:
-    image: qdrant/qdrant:latest
-    ports:
-      - "127.0.0.1:6333:6333"
-    volumes:
-      - qdrant_data:/qdrant/storage
-    environment:
-      QDRANT__SERVICE__API_KEY: "${QDRANT_API_KEY:-}"
-    restart: unless-stopped
-
   promtail:
     image: grafana/promtail:3.4.2
     command: -config.file=/etc/promtail/config.yml -config.expand-env=true
