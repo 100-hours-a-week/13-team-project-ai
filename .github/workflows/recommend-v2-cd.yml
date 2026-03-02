@@ -74,7 +74,7 @@ jobs:
               "",
               "# Parameter Store → .env",
               "> ${COMPOSE_DIR}/.env",
-              "for param in PG_HOST PG_PORT PG_USER PG_PASSWORD PG_DB; do",
+              "for param in PG_HOST PG_PORT PG_USER PG_PASSWORD PG_DB QDRANT_URL QDRANT_API_KEY QDRANT_COLLECTION; do",
               "  val=$(aws ssm get-parameter --name /moyeobab/recommend/${DEPLOY_ENV}/${param} --with-decryption --query \"Parameter.Value\" --output text --region ${REGION})",
               "  echo \"${param}=${val}\" >> ${COMPOSE_DIR}/.env",
               "done",
@@ -223,6 +223,14 @@ jobs:
             echo "result=failure" >> "$GITHUB_OUTPUT"
             exit 1
           fi
+
+      - name: Save IMAGE_TAG to Parameter Store
+        run: |
+          aws ssm put-parameter \
+            --name "/moyeobab/recommend/${{ env.DEPLOY_ENV }}/IMAGE_TAG" \
+            --value "${{ env.IMAGE_TAG }}" \
+            --type String \
+            --overwrite
 
       - name: Notify Discord
         if: always()
