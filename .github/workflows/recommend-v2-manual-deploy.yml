@@ -87,7 +87,7 @@ jobs:
               "",
               "# Parameter Store → .env",
               "> ${COMPOSE_DIR}/.env",
-              "for param in PG_HOST PG_PORT PG_USER PG_PASSWORD PG_DB QDRANT_URL QDRANT_API_KEY; do",
+              "for param in PG_HOST PG_PORT PG_USER PG_PASSWORD PG_DB QDRANT_URL QDRANT_API_KEY QDRANT_COLLECTION; do",
               "  val=$(aws ssm get-parameter --name /moyeobab/recommend/${DEPLOY_ENV}/${param} --with-decryption --query \"Parameter.Value\" --output text --region ${REGION})",
               "  echo \"${param}=${val}\" >> ${COMPOSE_DIR}/.env",
               "done",
