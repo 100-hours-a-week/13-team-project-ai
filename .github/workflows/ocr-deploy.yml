@@ -64,5 +64,5 @@ jobs:
           curl -X POST https://api.runpod.io/graphql?api_key=${{ secrets.RUNPOD_API_KEY }} \
           -H "Content-Type: application/json" \
           -d '{
-            "query": "mutation { podEditJob(input: { podId: \"${{ secrets.POD_ID }}\", imageName: \"${{ env.REGISTRY }}/${{ env.OWNER }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}\", containerDiskInGb: 40 }) { id imageName } }"
+            "query": "mutation { podEditJob(input: { podId: \"${{ secrets.POD_ID }}\", imageName: \"${{ env.REGISTRY }}/${{ env.OWNER }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}\", containerDiskInGb: 20 }) { id imageName } }"
           }'
