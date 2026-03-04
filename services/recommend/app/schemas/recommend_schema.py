@@ -17,7 +17,7 @@ v1 → v2 변경 요약
 from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
