@@ -24,21 +24,29 @@ jobs:
     steps:
       - name: Update RunPod Template
         run: |
-          RESPONSE=$(curl -sf -X POST "https://api.runpod.io/graphql?api_key=${{ secrets.RUNPOD_API_KEY }}" \
+          RESPONSE=$(curl -s -X POST "https://api.runpod.io/graphql?api_key=${{ secrets.RUNPOD_API_KEY }}" \
             -H "Content-Type: application/json" \
             -d '{
               "query": "mutation { saveTemplate(input: { id: \"${{ env.TEMPLATE_ID }}\", name: \"${{ env.IMAGE_NAME }}\", imageName: \"${{ env.REGISTRY }}/${{ env.OWNER }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}\", containerDiskInGb: 30, volumeInGb: 0, dockerArgs: \"\", env: [{key: \"VLLM_BASE_URL\", value: \"${{ secrets.VLLM_BASE_URL }}\"}, {key: \"VLLM_MODEL\", value: \"${{ secrets.VLLM_MODEL }}\"}, {key: \"VLLM_TIMEOUT\", value: \"${{ secrets.VLLM_TIMEOUT }}\"}] }) { id } }"
             }')
-          echo "Template updated: $RESPONSE"
+          echo "Response: $RESPONSE"
+          if echo "$RESPONSE" | jq -e '.errors' > /dev/null 2>&1; then
+            echo "::error::RunPod Template 업데이트 실패: $(echo "$RESPONSE" | jq -r '.errors[0].message')"
+            exit 1
+          fi
 
       - name: Restart RunPod Instance
         run: |
-          RESPONSE=$(curl -sf -X POST "https://api.runpod.io/graphql?api_key=${{ secrets.RUNPOD_API_KEY }}" \
+          RESPONSE=$(curl -s -X POST "https://api.runpod.io/graphql?api_key=${{ secrets.RUNPOD_API_KEY }}" \
             -H "Content-Type: application/json" \
             -d '{
               "query": "mutation { podReset(input: { podId: \"${{ secrets.POD_ID }}\" }) { id } }"
             }')
-          echo "Pod reset: $RESPONSE"
+          echo "Response: $RESPONSE"
+          if echo "$RESPONSE" | jq -e '.errors' > /dev/null 2>&1; then
+            echo "::error::RunPod Pod 재시작 실패: $(echo "$RESPONSE" | jq -r '.errors[0].message')"
+            exit 1
+          fi
 
       - name: Health Check (Pod Status Polling)
         run: |
