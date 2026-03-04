@@ -14,11 +14,10 @@ EXPOSE 8000 8001
 
 CMD ["sh", "-c", "python3 -m vllm.entrypoints.openai.api_server \
     --model /workspace/models/qwen3-vl \
-    --served-model-name /workspace/models/qwen3-vl \
+    --served-model-name /workspace/qwen3_final_full_model \
     --max-model-len 8192 \
     --gpu-memory-utilization 0.8 \
     --enforce-eager \
     --port 8000 & \
     until nc -z localhost 8000; do echo 'Waiting for vLLM...'; sleep 5; done && \
     uvicorn app.main:app --host 0.0.0.0 --port 8001"]
-
