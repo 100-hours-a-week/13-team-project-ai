@@ -38,7 +38,7 @@ try:
     from qdrant_client import QdrantClient
     from qdrant_client.models import (
         Distance, VectorParams,
-        PointStruct, PayloadSchemaType,
+        PointStruct,
     )
 except ImportError:
     print("❌ qdrant-client 미설치 → pip install qdrant-client")
@@ -129,7 +129,7 @@ if batch:
 
 # ── 결과 확인 ─────────────────────────────────────────────────────
 info = client.get_collection(args.collection)
-print(f"\n✅ 업로드 완료!")
+print("\n✅ 업로드 완료!")
 print(f"   업로드 건수  : {total_uploaded}")
 print(f"   컬렉션 벡터 수: {info.vectors_count}")
 print(f"   컬렉션 이름  : {args.collection}")
