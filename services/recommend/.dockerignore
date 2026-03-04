@@ -48,8 +48,8 @@ datasets/
 # =========================
 # AI Models / Cache
 # =========================
-models/
-model/
+# models/
+# model/
 weights/
 checkpoints/
 ckpt/

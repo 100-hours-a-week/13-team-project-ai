@@ -1,14 +1,15 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(
-    title="Recommend Service",
-    description="Group restaurant recommendation service",
-    version="0.1.0",
-)
+from app.services.llm import LLMService
+from app.routers.health import router as health_router
+from app.routers.gen import router as gen_router
 
-@app.get("/health")
-def health_check():
-    return {
-        "status": "ok",
-        "service": "recommend"
-    }
+app = FastAPI(title="Qwen API (minimal)")
+
+@app.on_event("startup")
+def startup():
+    app.state.llm = LLMService() 
+
+app.include_router(health_router)
+app.include_router(gen_router)
