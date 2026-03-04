@@ -17,14 +17,14 @@ class LLMService:
         self.timeout = float(os.getenv("VLLM_TIMEOUT"))
 
     def _preprocess_image(self, img: Image.Image) -> str:
-        """이미지 2배 확대 및 선명도 향상 (vLLM 최적화)"""
+        """이미지 3배 확대 및 선명도 향상 (vLLM 최적화)"""
         
         # 1. PIL Image를 OpenCV(NumPy) 형식으로 변환
         img_cv = cv2.cvtColor(np.array(img.convert("RGB")), cv2.COLOR_RGB2BGR)
     
-        # 2. 이미지 2배 확대 (INTER_CUBIC)
+        # 2. 이미지 3배 확대 (INTER_CUBIC)
         h, w = img_cv.shape[:2]
-        img_cv = cv2.resize(img_cv, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC)
+        img_cv = cv2.resize(img_cv, (w * 3, h * 3), interpolation=cv2.INTER_CUBIC)
     
         # 3. 선명도 향상 (Unsharp Masking 기법)
         gaussian = cv2.GaussianBlur(img_cv, (0, 0), 2.0)
