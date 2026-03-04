@@ -40,16 +40,17 @@ def safe_float(x, default=0.0):
     try:
         v = float(x)
         return default if (math.isnan(v) or math.isinf(v)) else v
-    except:
+    except Exception:
         return default
 
 
 def safe_int(x, default=0):
     try:
-        if isinstance(x, bool): return int(x)
+        if isinstance(x, bool):
+            return int(x)
         v = float(x)
         return default if (math.isnan(v) or math.isinf(v)) else int(v)
-    except:
+    except Exception:
         return default
 
 
@@ -85,7 +86,7 @@ def dow_from_start_time(s: str) -> Tuple[int, bool]:
         dt  = datetime.fromisoformat(str(s))
         dow = dt.weekday()
         return dow, dow >= 5
-    except:
+    except Exception:
         return 0, False
 
 
@@ -94,10 +95,14 @@ def dow_from_start_time(s: str) -> Tuple[int, bool]:
 # ================================================================
 
 def vote_tier(lk_v: float, dk_v: float) -> int:
-    if   lk_v > 0 and dk_v == 0:  return 1
-    elif lk_v == 0 and dk_v == 0: return 2
-    elif lk_v > 0 and dk_v > 0:   return 3
-    else:                           return 4
+    if lk_v > 0 and dk_v == 0:
+        return 1
+    elif lk_v == 0 and dk_v == 0:
+        return 2
+    elif lk_v > 0 and dk_v > 0:
+        return 3
+    else:
+        return 4
 
 
 def get_restaurant_tier(rid: int,
@@ -290,7 +295,7 @@ def predict(user_request: Dict, model, meta: Dict) -> pd.DataFrame:
     feat_idx         = {n: i for i, n in enumerate(feat_names)}
     n_feat           = len(feat_names)
     radius_expand    = meta.get('RADIUS_EXPAND',    1.5)
-    hard_dislike_thr = meta.get('HARD_DISLIKE_THR', 2)
+    _                = meta.get('HARD_DISLIKE_THR', 2)
     tier_ratio       = meta.get('TIER_RATIO', TIER_RATIO_DEFAULT)
     pref_alpha       = meta.get('PREF_ALPHA', PREF_ALPHA)
 

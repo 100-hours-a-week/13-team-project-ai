@@ -1,4 +1,3 @@
-"""app/core/config.py — 환경변수 기반 설정."""
 from pathlib import Path
 from typing import Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
