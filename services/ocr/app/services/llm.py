@@ -73,23 +73,35 @@ class LLMService:
 
         raw_data = json.loads(content[start:end + 1])
 
-        
+
+        # analyze_receipt 메서드 내 결과 처리 부분
         if "result" in raw_data and raw_data["result"] is not None:
             res_body = raw_data["result"]
             
-            # 1. discount_amount 계산 로직 (total - paid)
-            total = res_body.get("total_amount") or 0
-            paid = res_body.get("paid_amount") or 0
-            
-            # 할인 금액이 음수가 나오지 않도록 처리 
-            res_body["discount_amount"] = max(0, total - paid)
+            # 1. 기본값 세팅 (None 방지)
+            items = res_body.get("items") or []
+            extracted_total = res_body.get("total_amount") or 0
+            extracted_paid = res_body.get("paid_amount") or 0
+            extracted_discount = res_body.get("discount_amount") or 0
+        
+            # 2. 1차 검증: Total - Discount = Paid 가 맞는지 확인
+            if (extracted_total - extracted_discount != extracted_paid) or (extracted_total == 0):
+                calculated_item_sum = sum(item.get("amount", 0) for item in items)
                 
-            # 2. created_at 보정: 서버 현재 시간 사용
-            if "created_at" not in res_body or not res_body["created_at"]:
-                kst = pytz.timezone('Asia/Seoul')
-                res_body["created_at"] = datetime.now(kst).isoformat()
-
-            # 3. Pydantic 검증 및 반환
+                # total_amount를 메뉴 합계로 재설정
+                res_body["total_amount"] = calculated_item_sum
+                res_body["discount_amount"] = max(0, calculated_item_sum - extracted_paid)
+                res_body["paid_amount"] = extracted_paid
+            else:
+                # 이미 맞다면 추출된 값 그대로 사용
+                res_body["total_amount"] = extracted_total
+                res_body["discount_amount"] = extracted_discount
+                res_body["paid_amount"] = extracted_paid
+        
+            # 3. 시간 보정 및 Pydantic 검증
+            kst = pytz.timezone('Asia/Seoul')
+            res_body["created_at"] = datetime.now(kst).isoformat()
+            
             validated = ReceiptResult(**res_body)
             return {"result": validated.model_dump()}
         
