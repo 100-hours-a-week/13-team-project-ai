@@ -56,7 +56,7 @@ jobs:
     needs: build-and-push
     runs-on: ubuntu-latest
     steps:
-      - name: Update RunPod Template
+      - name: Update RunPod Template (optional)
         run: |
           BODY=$(jq -n \
             --arg name "${{ env.IMAGE_NAME }}" \
@@ -93,6 +93,71 @@ jobs:
             echo "::error::RunPod Template 업데이트 실패"
             exit 1
           fi
+
+      - name: Update RunPod Pod (single pod redeploy)
+        run: |
+          POD_BODY=$(jq -n \
+            --arg image "${{ env.REGISTRY }}/${{ env.OWNER }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}" \
+            --arg port1 "8000/http" \
+            --arg port2 "8001/http" \
+            --argjson containerDisk 30 \
+            --arg vllm_base_url "${{ secrets.VLLM_BASE_URL }}" \
+            --arg vllm_model "${{ secrets.VLLM_MODEL }}" \
+            --arg vllm_timeout "${{ secrets.VLLM_TIMEOUT }}" \
+            '{
+              imageName: $image,
+              containerDiskInGb: $containerDisk,
+              ports: [$port1, $port2],
+              env: {
+                VLLM_BASE_URL: $vllm_base_url,
+                VLLM_MODEL: $vllm_model,
+                VLLM_TIMEOUT: $vllm_timeout
+              }
+            }')
+
+          echo "[INFO] Updating Pod: ${{ secrets.POD_ID }}"
+          echo "$POD_BODY" | jq .
+
+          POD_RESPONSE=$(curl -sS -X POST "https://rest.runpod.io/v1/pods/${{ secrets.POD_ID }}/update" \
+            -H "Authorization: Bearer ${{ secrets.RUNPOD_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "$POD_BODY")
+
+          echo "$POD_RESPONSE" | jq .
+          # 응답 포맷이 환경마다 달라서, 실패 케이스만 확실히 잡자
+          if echo "$POD_RESPONSE" | jq -e '.error' >/dev/null 2>&1; then
+            echo "::error::RunPod Pod update 실패"
+            exit 1
+          fi
+
+          echo "[OK] Pod update requested"
+
+      - name: Pod Status Polling (wait until RUNNING)
+        run: |
+          echo "[INFO] Waiting for RunPod pod to be RUNNING..."
+          for i in $(seq 1 60); do
+            RESULT=$(curl -sf -X POST "https://api.runpod.io/graphql?api_key=${{ secrets.RUNPOD_API_KEY }}" \
+              -H "Content-Type: application/json" \
+              -d '{
+                "query": "query { pod(input: { podId: \"${{ secrets.POD_ID }}\" }) { desiredStatus runtime { uptimeInSeconds } } }"
+              }')
+
+            STATUS=$(echo "$RESULT" | jq -r '.data.pod.desiredStatus // "UNKNOWN"')
+            UPTIME=$(echo "$RESULT" | jq -r '.data.pod.runtime.uptimeInSeconds // "null"')
+
+            echo "[CHECK ${i}/60] status=${STATUS}, uptime=${UPTIME}s"
+
+            # update 후 재기동이면 uptime이 다시 작아지는 게 정상.
+            if [ "$STATUS" = "RUNNING" ] && [ "$UPTIME" != "null" ] && [ "$UPTIME" -ge 10 ] 2>/dev/null; then
+              echo "[OK] Pod is RUNNING (uptime: ${UPTIME}s)"
+              exit 0
+            fi
+
+            sleep 10
+          done
+
+          echo "[FAIL] Pod did not reach RUNNING state within 10 minutes"
+          exit 1
 
       - name: Health Check (Pod Status Polling)
         run: |
