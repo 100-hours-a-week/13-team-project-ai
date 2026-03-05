@@ -1,4 +1,4 @@
-FROM vllm/vllm-openai:v0.7.2
+FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 
 WORKDIR /app
 
@@ -14,7 +14,7 @@ EXPOSE 8000 8001
 
 CMD ["sh", "-c", "python3 -m vllm.entrypoints.openai.api_server \
     --model /workspace/qwen3_final_full_model \
-    --served-model-name qwen3-vl \
+    --served-model-name /workspace/qwen3_final_full_model \
     --max-model-len 8192 \
     --gpu-memory-utilization 0.8 \
     --enforce-eager \
