@@ -1,22 +1,24 @@
-
-
-# docker/promtail.yml
-# Grafana Loki 로그 수집 설정 (필요 시 수정)
 server:
-  http_listen_port: 3100
+  http_listen_port: 9080
   grpc_listen_port: 0
 
 positions:
   filename: /tmp/positions.yaml
 
 clients:
-  - url: http://loki.internal.dev.moyeobab.com:3100/loki/api/v2/push
+  - url: ${LOKI_URL}
 
 scrape_configs:
-  - job_name: recommend
-    static_configs:
-      - targets:
-          - localhost
-        labels:
-          job: recommend
-          __path__: /var/log/*.log
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+    relabel_configs:
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: container
+      - source_labels: ['__meta_docker_compose_service']
+        target_label: service
+      - source_labels: ['__meta_docker_container_name']
+        regex: '.*promtail.*'
+        action: drop
