@@ -1,5 +1,3 @@
-# app/core/prompts.py
-
 RECEIPT_OCR_PROMPT = """
 Return ONLY valid JSON. No markdown, no explanations.
 If the image is a valid receipt, return the Result Schema.
@@ -10,7 +8,8 @@ If the image does not look like a receipt, return the Error Schema.
   "result": {
     "items": [{"name": string, "unit_price": int, "quantity": int, "amount": int}],
     "total_amount": int | null,
-    "paid_amount": int | null
+    "paid_amount": int | null,
+    "discount_amount": int | null
   }
 }
 
@@ -19,12 +18,12 @@ If the image does not look like a receipt, return the Error Schema.
 
 Rules:
 1. Extract ONLY "Menu/Product" line items.
-2. EXCLUDE tax-related or subtotal metadata from the "items" list.
-   - Never include: 부가세, 부가가치세, VAT, 과세물품가액, 면세물품가액, 공급가액, 봉사료, 합계.
-3. Logical Filtering: Only include items that represent an actual dish, product, or service purchased.
-4. If an item has 0 quantity or seems to be a tax calculation (like 10% of a subtotal), EXCLUDE it.
-5. 'total_amount' is the final amount to be paid (합계/결제금액).
-6. 'paid_amount' is the actual amount charged to the card or paid in cash.
+2. EXCLUDE tax-related metadata (부가세, VAT, 공급가액 등) from "items".
+3. 'total_amount': The amount before discounts (합계금액/총금액).
+4. 'paid_amount': The final amount charged (결제금액/승인금액).
+5. 'discount_amount': Sum of all reductions.
+   - Include negative amounts (e.g., -3,100) under menu items.
+   - Include fields labeled '할인금액', '서비스', 'D.C'.
+   - Return as a positive integer.
+6. If an item has 0 price (and is not a main product), EXCLUDE it.
 """.strip()
-
-
