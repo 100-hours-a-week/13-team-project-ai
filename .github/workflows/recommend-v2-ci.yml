@@ -6,11 +6,13 @@ on:
     paths:
       - "services/recommend/**"
       - ".github/workflows/recommend-v2-ci.yml"
+      - ".github/workflows/recommend-v2-cd.yml"
   push:
     branches: [main, develop]
     paths:
       - "services/recommend/**"
       - ".github/workflows/recommend-v2-ci.yml"
+      - ".github/workflows/recommend-v2-cd.yml"
 
 permissions:
   contents: read
