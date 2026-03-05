@@ -4,13 +4,13 @@ on:
   pull_request:
     branches: [main, develop]
     paths:
-      - "services/recommend/**"
+      - "services/**"
       - ".github/workflows/recommend-v2-ci.yml"
       - ".github/workflows/recommend-v2-cd.yml"
   push:
     branches: [main, develop]
     paths:
-      - "services/recommend/**"
+      - "services/**"
       - ".github/workflows/recommend-v2-ci.yml"
       - ".github/workflows/recommend-v2-cd.yml"
 
