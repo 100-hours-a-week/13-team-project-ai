@@ -34,11 +34,11 @@ async def create_recommendations(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Recommendation Error: {str(e)}")
 
-    # 후보 없음
-    if df_top is None or df_top.empty:
+    # 후보 부족 (카드 한도의 2배수(20장) 미만인 경우)
+    if df_top is None or len(df_top) < request.swipe.card_limit * 2:
         raise HTTPException(
             status_code=404,
-            detail={"code": "NO_CANDIDATES", "detail": "no candidates found within radius"},
+            detail={"code": "INSUFFICIENT_CANDIDATES", "detail": "not enough candidates found (minimum 2x card_limit required)"},
         )
 
     # 응답 구성
