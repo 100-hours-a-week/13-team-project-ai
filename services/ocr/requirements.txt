@@ -9,3 +9,4 @@ pytz
 vllm
 qwen-vl-utils
 httpx
+langsmith
