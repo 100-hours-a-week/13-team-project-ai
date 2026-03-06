@@ -78,6 +78,7 @@ jobs:
               "  val=$(aws ssm get-parameter --name /moyeobab/recommend/${DEPLOY_ENV}/${param} --with-decryption --query \"Parameter.Value\" --output text --region ${REGION})",
               "  echo \"${param}=${val}\" >> ${COMPOSE_DIR}/.env",
               "done",
+              "echo \"LOKI_URL=$(aws ssm get-parameter --name /moyeobab/recommend/${{ env.DEPLOY_ENV }}/LOKI_URL --query Parameter.Value --output text --region ${{ env.AWS_REGION }})\" >> ${{ env.COMPOSE_DIR }}/.env",
               "echo \"ECR_REGISTRY=${ECR_REGISTRY}\" >> ${COMPOSE_DIR}/.env",
               "echo \"IMAGE_TAG=${IMAGE_TAG}\" >> ${COMPOSE_DIR}/.env",
               "echo \"ENV=${DEPLOY_ENV}\" >> ${COMPOSE_DIR}/.env",

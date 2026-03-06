@@ -17,9 +17,8 @@ from __future__ import annotations
 import logging
 from typing import Dict, List, Optional
 
-import numpy as np
-
 from app.core.config import settings
+
 
 logger = logging.getLogger(__name__)
 
