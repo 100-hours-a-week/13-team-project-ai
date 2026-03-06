@@ -9,6 +9,7 @@ from PIL import Image
 from app.schemas.schemas import ReceiptResult # 스키마 임포트
 from datetime import datetime
 import pytz
+from langsmith import traceable
 
 class LLMService:
     def __init__(self):
@@ -40,6 +41,7 @@ class LLMService:
         
         return f"data:image/jpeg;base64,{b64}"
 
+    @traceable(name="analyze_receipt", run_type="llm")
     def analyze_receipt(self, img: Image.Image, prompt: str) -> dict:
         """vLLM 서버 호출 및 결과 파싱"""
         img_url = self._preprocess_image(img)
