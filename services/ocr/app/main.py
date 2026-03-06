@@ -1,3 +1,6 @@
+import os
+os.environ["LANGCHAIN_TRACING_V2"] = "true"
+os.environ["LANGCHAIN_PROJECT"] = "moyeobab-ocr"
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
