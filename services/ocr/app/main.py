@@ -10,6 +10,10 @@ from app.routers.gen import router as gen_router
 
 app = FastAPI(title="Qwen API (minimal)")
 
+@app.get("/")
+async def root():
+    return {"message": "OCR Server is running", "status": "online"}
+
 @app.on_event("startup")
 def startup():
     app.state.llm = LLMService() 
