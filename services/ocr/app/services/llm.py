@@ -12,7 +12,6 @@ import pytz
 from langsmith import traceable
 from fastapi.concurrency import run_in_threadpool  
 
-
 class LLMService:
     def __init__(self):
         self.base_url = os.getenv("VLLM_BASE_URL")
