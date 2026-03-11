@@ -35,7 +35,7 @@ async def receipt_ocr(request: Request, body: ReceiptRequest):
 
     try:
         # LLM 서비스 호출 
-        ocr_data = request.app.state.llm.analyze_receipt(img, RECEIPT_OCR_PROMPT)
+        ocr_data = await request.app.state.llm.analyze_receipt(img, RECEIPT_OCR_PROMPT)
         
         # response_model 형식에 맞춰 리턴
         return {
