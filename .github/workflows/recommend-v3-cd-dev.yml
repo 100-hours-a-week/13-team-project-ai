@@ -30,12 +30,12 @@ jobs:
     outputs:
       image_tag: ${{ steps.set-tag.outputs.image_tag }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Set image tag (short SHA)
         id: set-tag
         run: echo "image_tag=sha-$(echo ${{ github.sha }} | cut -c1-8)" >> $GITHUB_OUTPUT
-
-      - name: Checkout
-        uses: actions/checkout@v4
 
       - name: Configure AWS Credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
