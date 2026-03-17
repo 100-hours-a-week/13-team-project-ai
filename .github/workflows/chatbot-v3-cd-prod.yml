@@ -1,0 +1,119 @@
+name: AI Chatbot V3 CD (Prod)
+run-name: AI Chatbot V3 CD Prod • ${{ github.event.head_commit.message }}
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "services/chatbot/**"
+      - ".github/workflows/chatbot-v3-*.yml"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: chatbot-v3-cd-prod
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: ap-northeast-2
+  ECR_REPOSITORY: moyeobab/chatbot
+
+jobs:
+  promote:
+    runs-on: ubuntu-24.04-arm
+    environment: production
+    steps:
+      - name: Set image tag (short SHA)
+        id: set-tag
+        run: echo "image_tag=sha-$(echo ${{ github.sha }} | cut -c1-8)" >> $GITHUB_OUTPUT
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify image exists in ECR
+        env:
+          IMAGE_TAG: ${{ steps.set-tag.outputs.image_tag }}
+        run: |
+          if ! aws ecr describe-images --repository-name $ECR_REPOSITORY --image-ids imageTag=$IMAGE_TAG 2>/dev/null; then
+            echo "::error::Image $IMAGE_TAG not found in ECR. Dev에서 먼저 빌드해야 합니다."
+            exit 1
+          fi
+          echo "Image $IMAGE_TAG verified in ECR"
+
+      - name: Setup SSH and clone cloud repo
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.CLOUD_DEPLOY_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          git clone git@github.com:100-hours-a-week/13-team-project-cloud.git cloud-repo
+
+      - name: Setup Kustomize
+        run: |
+          curl -sL https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.6.0/kustomize_v5.6.0_linux_arm64.tar.gz | tar xz
+          sudo mv kustomize /usr/local/bin/
+
+      - name: Update prod image tag
+        env:
+          IMAGE_TAG: ${{ steps.set-tag.outputs.image_tag }}
+        run: |
+          cd cloud-repo/v3-kubernetes/k8s/overlays/prod/chatbot
+          kustomize edit set image moyeobab/chatbot=$(grep -oP 'newName: \K.*moyeobab/chatbot' kustomization.yaml):$IMAGE_TAG
+
+      - name: Commit and push
+        env:
+          IMAGE_TAG: ${{ steps.set-tag.outputs.image_tag }}
+        run: |
+          cd cloud-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add v3-kubernetes/k8s/overlays/prod/chatbot/kustomization.yaml
+          git diff --cached --quiet && echo "No changes" && exit 0
+          git commit -m "deploy(prod): chatbot 이미지 태그 업데이트 ($IMAGE_TAG)"
+          git push
+
+      - name: Notify Discord
+        if: always()
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_CD }}
+          IMAGE_TAG: ${{ steps.set-tag.outputs.image_tag }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            TITLE="[PROD] Chatbot 배포 요청 완료"
+            DESC="이미지 \`${{ env.IMAGE_TAG }}\` → ArgoCD 자동 배포 대기"
+            COLOR=3066993
+          else
+            TITLE="[PROD] Chatbot 배포 실패"
+            DESC="이미지 검증 또는 매니페스트 업데이트 실패"
+            COLOR=15158332
+          fi
+
+          jq -n \
+            --arg title "$TITLE" \
+            --arg desc "$DESC" \
+            --arg color "$COLOR" \
+            --arg author "${{ github.event.head_commit.author.name }}" \
+            --arg msg "${{ github.event.head_commit.message }}" \
+            --arg tag "${{ env.IMAGE_TAG }}" \
+            --arg url "$RUN_URL" \
+            '{
+              embeds: [{
+                title: $title,
+                description: $desc,
+                color: ($color | tonumber),
+                fields: [
+                  {name: "환경", value: "PROD", inline: true},
+                  {name: "작성자", value: $author, inline: true},
+                  {name: "이미지 태그", value: ("`" + $tag + "`"), inline: true},
+                  {name: "커밋", value: $msg, inline: false},
+                  {name: "상세", value: ("[Actions 로그](" + $url + ")"), inline: false}
+                ],
+                footer: { text: "Chatbot V3 CD → ArgoCD" }
+              }]
+            }' | curl -sf -X POST "$WEBHOOK" -H "Content-Type: application/json" -d @-
