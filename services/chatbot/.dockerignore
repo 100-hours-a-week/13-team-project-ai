@@ -54,6 +54,8 @@ wandb/
 # Docs / Tests
 # =========================
 tests/
+test/
+tmp/
 docs/
 README.md
 
