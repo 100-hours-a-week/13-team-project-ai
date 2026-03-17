@@ -6,8 +6,8 @@ from app.common.retriever import qdrant_facility_filter, filter_open_now, _SERVI
 from app.core.config import settings
 
 from app.common.parser import validate_conditions, rule_based_parse, extract_restaurant_names
-from app.llm.prompts import get_condition_extraction_prompt, get_answer_generation_prompt
-from app.common.details import get_details, format_details, generate_answer
+from app.llm.prompts import get_condition_extraction_prompt
+from app.common.details import get_details, generate_answer
 
 @traceable(run_type="chain", name="Extract Multi-turn Conditions")
 async def extract_accumulated_conditions(

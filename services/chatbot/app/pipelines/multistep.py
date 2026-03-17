@@ -28,7 +28,7 @@ async def _extract_conditions_with_llm(query: str, current_time: str) -> dict:
     except Exception:
         return rule_based_parse(query)
 
-from app.common.details import get_details, format_details, generate_answer
+from app.common.details import get_details, generate_answer
 
 @traceable(run_type="chain", name="Multistep Pipeline")
 async def multistep_pipeline(query: str, current_time: str) -> str:
