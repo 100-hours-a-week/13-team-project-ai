@@ -1,24 +1,24 @@
-name: AI Recommend V3 CD (Prod)
-run-name: AI Recommend V3 CD Prod • ${{ github.event.head_commit.message }}
+name: AI Chatbot V3 CD (Prod)
+run-name: AI Chatbot V3 CD Prod • ${{ github.event.head_commit.message }}
 
 on:
   push:
     branches: [main]
     paths:
-      - "services/recommend/**"
-      - ".github/workflows/recommend-v3-*.yml"
+      - "services/chatbot/**"
+      - ".github/workflows/chatbot-v3-*.yml"
 
 permissions:
   contents: read
   id-token: write
 
 concurrency:
-  group: recommend-v3-cd-prod
+  group: chatbot-v3-cd-prod
   cancel-in-progress: true
 
 env:
   AWS_REGION: ap-northeast-2
-  ECR_REPOSITORY: moyeobab/recommend
+  ECR_REPOSITORY: moyeobab/chatbot
 
 jobs:
   promote:
@@ -62,8 +62,8 @@ jobs:
         env:
           IMAGE_TAG: ${{ steps.set-tag.outputs.image_tag }}
         run: |
-          cd cloud-repo/v3-kubernetes/k8s/overlays/prod
-          kustomize edit set image moyeobab/recommend=$(grep -oP 'newName: \K.*moyeobab/recommend' kustomization.yaml):$IMAGE_TAG
+          cd cloud-repo/v3-kubernetes/k8s/overlays/prod/chatbot
+          kustomize edit set image moyeobab/chatbot=$(grep -oP 'newName: \K.*moyeobab/chatbot' kustomization.yaml):$IMAGE_TAG
 
       - name: Commit and push
         env:
@@ -72,9 +72,9 @@ jobs:
           cd cloud-repo
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add v3-kubernetes/k8s/overlays/prod/kustomization.yaml
+          git add v3-kubernetes/k8s/overlays/prod/chatbot/kustomization.yaml
           git diff --cached --quiet && echo "No changes" && exit 0
-          git commit -m "deploy(prod): recommend 이미지 태그 업데이트 ($IMAGE_TAG)"
+          git commit -m "deploy(prod): chatbot 이미지 태그 업데이트 ($IMAGE_TAG)"
           git push
 
       - name: Notify Discord
@@ -85,11 +85,11 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           if [ "${{ job.status }}" = "success" ]; then
-            TITLE="[PROD] Recommend 배포 요청 완료"
+            TITLE="[PROD] Chatbot 배포 요청 완료"
             DESC="이미지 \`${{ env.IMAGE_TAG }}\` → ArgoCD 자동 배포 대기"
             COLOR=3066993
           else
-            TITLE="[PROD] Recommend 배포 실패"
+            TITLE="[PROD] Chatbot 배포 실패"
             DESC="이미지 검증 또는 매니페스트 업데이트 실패"
             COLOR=15158332
           fi
@@ -114,6 +114,6 @@ jobs:
                   {name: "커밋", value: $msg, inline: false},
                   {name: "상세", value: ("[Actions 로그](" + $url + ")"), inline: false}
                 ],
-                footer: { text: "Recommend V3 CD → ArgoCD" }
+                footer: { text: "Chatbot V3 CD → ArgoCD" }
               }]
             }' | curl -sf -X POST "$WEBHOOK" -H "Content-Type: application/json" -d @-
