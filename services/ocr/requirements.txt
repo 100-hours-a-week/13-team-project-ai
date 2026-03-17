@@ -6,7 +6,6 @@ python-dotenv
 pillow
 requests
 pytz
-vllm
 qwen-vl-utils
 httpx
 langsmith
