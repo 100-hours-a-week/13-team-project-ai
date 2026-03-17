@@ -18,6 +18,15 @@ class LLMService:
         self.model = os.getenv("VLLM_MODEL") 
         self.timeout = float(os.getenv("VLLM_TIMEOUT", 60.0))
 
+        self.client = httpx.AsyncClient(
+            base_url=self.base_url,
+            timeout=self.timeout,
+            limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)
+        )
+    async def close(self):
+            """서비스 종료 시 연결 통로를 닫습니다."""
+            await self.client.aclose()
+
     def _preprocess_image(self, img: Image.Image) -> str:
         """이미지 3배 확대 및 선명도 향상 (CPU 집중 작업)"""
         # 1. PIL Image를 OpenCV(NumPy) 형식으로 변환
@@ -53,23 +62,17 @@ class LLMService:
             "messages": [{
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": img_url}},                    
+                    {"type": "image_url", "image_url": {"url": img_url}},
+                    {"type": "text", "text": prompt},                                        
                 ],
             }],
             "max_tokens": 600,
             "temperature": 0.0,
         }
 
-        # httpx를 사용하여 비동기로 vLLM에 요청
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{self.base_url}/v1/chat/completions",
-                json=payload,
-                timeout=self.timeout
-            )
-            response.raise_for_status()
-            res_json = response.json()
+        response = await self.client.post("/v1/chat/completions", json=payload)
+        response.raise_for_status()
+        res_json = response.json()
 
         content = res_json["choices"][0]["message"]["content"].strip()
         
@@ -83,12 +86,15 @@ class LLMService:
             res_body = raw_data["result"]
             
             # 1. 기본값 세팅
-            items = res_body.get("items") or []
+            raw_items = res_body.get("items") or []
+            items = [i for i in raw_items if i.get("amount", 0) > 0]
+            
+            res_body["items"] = items
             extracted_total = res_body.get("total_amount") or 0
             extracted_paid = res_body.get("paid_amount") or 0
             extracted_discount = res_body.get("discount_amount") or 0
 
-            # 2. 1차 검증: Total - Discount = Paid 가 맞는지 확인
+            # 2. 1차 검증: Total - Discount = Paid
             if (extracted_total - extracted_discount != extracted_paid) or (extracted_total == 0):
                 calculated_item_sum = sum(item.get("amount", 0) for item in items)
                 res_body["total_amount"] = calculated_item_sum

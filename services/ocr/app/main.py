@@ -21,7 +21,12 @@ async def root():
 async def startup():
 
     app.state.llm = LLMService()     
-    app.state.ocr_semaphore = asyncio.Semaphore(3)
+    app.state.ocr_semaphore = asyncio.Semaphore(5)
+
+@app.on_event("shutdown")
+async def shutdown():
+    await app.state.llm.close()
+    print("OCR Server is shutting down, client closed.")
 
 app.include_router(health_router)
 app.include_router(gen_router)
