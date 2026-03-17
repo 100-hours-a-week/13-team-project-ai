@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [develop, main]
     paths:
-      - "services/**"
+      - "services/recommend/**"
       - ".github/workflows/recommend-v3-*.yml"
 
 permissions:

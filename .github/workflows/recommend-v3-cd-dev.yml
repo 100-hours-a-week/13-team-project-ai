@@ -5,7 +5,7 @@ on:
   push:
     branches: [develop]
     paths:
-      - "services/**"
+      - "services/recommend/**"
       - ".github/workflows/recommend-v3-*.yml"
 
 permissions:
