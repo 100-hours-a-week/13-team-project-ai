@@ -53,8 +53,8 @@ class LLMService:
             "messages": [{
                 "role": "user",
                 "content": [
-                    {"type": "image_url", "image_url": {"url": img_url}},
                     {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": img_url}},                    
                 ],
             }],
             "max_tokens": 600,
