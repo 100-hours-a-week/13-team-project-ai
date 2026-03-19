@@ -44,8 +44,10 @@ def load_reranker(model_name: str = "BAAI/bge-reranker-v2-m3") -> None:
 
     try:
         from sentence_transformers import CrossEncoder
-        _reranker = CrossEncoder(model_name, max_length=512)
-        print(f"✅ Reranker 로딩 완료 ({model_name})")
+        import torch
+        device = "mps" if torch.backends.mps.is_available() else "cpu"
+        _reranker = CrossEncoder(model_name, max_length=512, device=device)
+        print(f"✅ Reranker 로딩 완료 ({model_name}) on {device}")
     except Exception as e:
         print(f"⚠️  Reranker 로딩 실패 (reranker 비활성화): {e}")
         _reranker = None
