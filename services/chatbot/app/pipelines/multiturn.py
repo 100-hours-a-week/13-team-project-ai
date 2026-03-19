@@ -1,82 +1,113 @@
-import json
 import re
-from app.llm.vllm_client import chat
-from langsmith import traceable
-from app.common.retriever import qdrant_facility_filter, filter_open_now, _SERVICE_REGIONS
-from app.core.config import settings
+from datetime import datetime
+from typing import List, Dict, Any, Optional
 
-from app.common.parser import validate_conditions, rule_based_parse, extract_restaurant_names
-from app.llm.prompts import get_condition_extraction_prompt
 from app.common.details import get_details, generate_answer
+from app.common.parser import (
+    extract_accumulated_conditions,
+    extract_restaurant_names,
+    FORBIDDEN_WORDS,
+    PRONOUNS
+)
+from app.common.retriever import qdrant_name_search, get_id_by_name
 
-@traceable(run_type="chain", name="Extract Multi-turn Conditions")
-async def extract_accumulated_conditions(
-    history: list[dict],
-    new_message: str,
-    current_time: str,
-) -> dict:
-    history_text = "\n".join(f"{h['role']}: {h['content'][:150]}" for h in history[-6:])
-    prompt = get_condition_extraction_prompt(new_message, current_time, history_text)
+async def multiturn_pipeline(user_message: str, history: List[Dict[str, str]], current_time: str) -> str:
+    """
+    멀티턴 대화 맥락을 유지하여 사용자 질문에 답변하는 파이프라인.
+    이전 추천 목록이나 언급된 식당을 기반으로 지시어(대치어)를 해소하고 정보를 제공함.
+    """
+    # ── 1.1: 검색 조건 추출 (LLM 활용) ──
+    conditions = await extract_accumulated_conditions(user_message, current_time, history)
     
-    raw = await chat([{"role": "user", "content": prompt}], max_tokens=200)
-    try:
-        cleaned = re.sub(r"```[a-z]*", "", raw).strip().strip("`").strip()
-        result  = json.loads(cleaned)
-        return validate_conditions(result)
-    except Exception:
-        return rule_based_parse(new_message)
+    # ── 1.2: 이전 대화 맥락 분석 ──
+    context_names = []
+    is_referencing_previous = any(kw in user_message for kw in PRONOUNS)
 
-
-@traceable(run_type="chain", name="Multiturn Pipeline")
-async def multiturn_pipeline(user_message: str, history: list[dict], current_time: str) -> str:
-    # ── 1: 누적 조건 추출 ──
-    conditions = await extract_accumulated_conditions(history, user_message, current_time)
+    # 마지막 AI 답변에서 식당 목록 추출
+    last_recommendations_found = []
+    has_multi_ref = any(kw in user_message for kw in ["모두", "전부", "세곳", "둘 다"])
     
-    # [방어 로직] 쿼리에 직접 식당 이름이 언급된 경우, 유연하게 대응
-    name_candidates = extract_restaurant_names(user_message)
-    if name_candidates and not conditions.get("name_query"):
-        conditions["name_query"] = name_candidates[0]
-        conditions["category"] = None
+    for h in reversed(history[-6:]):
+        if h["role"] == "assistant":
+            found = extract_restaurant_names(h["content"])
+            if found:
+                for f in found:
+                    cleaned_f = f.strip()
+                    base_f = re.sub(r"\s*(?:판교점|수내점|삼평점|백현점|분당점|본점|식당|레스토랑|바|카페)$", "", cleaned_f).strip()
+                    if base_f and base_f not in FORBIDDEN_WORDS:
+                        context_names.append(base_f)
+                last_recommendations_found = found
+                if not has_multi_ref or len(found) > 1:
+                    break
+
+    # ── 1.3: 새로운 질문 여부 판단 ──
+    # 정보를 묻는 키워드가 있으면 새로운 '추천' 요청이 아니라 기존 맥락에 대한 '정보' 요청으로 간주
+    is_info_query = any(kw in user_message for kw in ["주차", "룸", "영업", "운영", "정보", "시간", "메뉴", "위치", "어디", "번호", "전화"])
+    is_new_recommendation_request = (
+        any(kw in user_message for kw in ["추천", "찾아줘", "다른", "새로운", "말고"]) 
+        and not is_info_query
+    )
+
+    # [방어] 특정 속성 질의 시 이전의 menu_query가 방해되지 않도록 제거
+    if any(kw in user_message for kw in ["영업", "운영", "주차", "룸", "시간"]):
+        conditions["menu_query"] = None
+    if conditions.get("menu_query") and (len(conditions["menu_query"]) > 15 or "," in conditions["menu_query"]):
         conditions["menu_query"] = None
 
-    # ── 1.5: 식당명 직접 검색 ──
-    from app.common.retriever import qdrant_name_search
+    # 맥락 초기화 조건: 새로운 추천 요청이거나, 맥락 지시어가 없으면서 새로운 식당명이 언급되지도 않았는데 정보 요청도 아닌 경우
+    if is_new_recommendation_request:
+        context_names = []
+    elif not is_referencing_previous and not extract_restaurant_names(user_message):
+        # 정보 요청 키워드조차 없으면 맥락 끊김으로 간주 (단순 대화 등)
+        if not is_info_query:
+            context_names = []
+
+    # ── 1.4: 식당명 최종 결정 ──
+    direct_names = extract_restaurant_names(user_message)
+    potential_names = direct_names if direct_names else context_names
+
+    if not potential_names:
+        return "어떤 식당에 대해 알고 싶으신지 식당 이름을 다시 말씀해 주시겠어요?"
+
+    # ── 1.5: Qdrant 검색 (ID 확보) ──
+    all_ids = []
+    target_region = conditions.get("region")
     
-    # 1. LLM 추출 이름 우선
-    name_query = conditions.get("name_query")
-    # 2. 추출 실패 시 쿼리에서 직접 추출 시도 (Fallback)
-    if not name_query:
-        candidates_raw = extract_restaurant_names(user_message)
-        name_query = candidates_raw[0] if candidates_raw else None
-
-    if name_query:
-        name_ids = await qdrant_name_search(name_query)
+    if len(potential_names) == 1:
+        exact_id = await get_id_by_name(potential_names[0])
+        if exact_id: all_ids = [exact_id]
         
-        if not name_ids:
-            return f"죄송해요, '{name_query}'에 대한 정보는 등록되어 있지 않아요."
+    if not all_ids:
+        for name in potential_names:
+            ids = await qdrant_name_search(name, region=target_region)
+            if ids: all_ids.append(ids[0])
 
-        details = await get_details(name_ids[:5])
-        return await generate_answer(user_message, details, history)
+    unique_ids = list(dict.fromkeys(all_ids))
+    
+    # ── 1.6: 정보 조회 및 답변 생성 ──
+    if unique_ids:
+        try:
+            details = await get_details(unique_ids[:5])
+            filtered_details = []
+            for d in details:
+                mat = True
+                if not has_multi_ref:
+                    if conditions.get("room") and not d.get("facility", {}).get("room", {}).get("available"):
+                        mat = False
+                    if conditions.get("parking") and not d.get("facility", {}).get("parking", {}).get("available"):
+                        mat = False
+                    if conditions.get("capacity_min") and not d.get("facility", {}).get("group", {}).get("available"):
+                        mat = False
+                if mat: filtered_details.append(d)
 
-    # ── Step 2: 시설 필터 검색 ──
-    facility_ids = await qdrant_facility_filter(conditions)
-    candidates   = set(facility_ids)
+            if not filtered_details:
+                return "요청하신 정보에 해당하는 식당이 없어요."
 
-    # ── Step 2.5: 메뉴 필터 검색 ──
-    menu_q = conditions.get("menu_query")
-    if menu_q and menu_q != "메뉴" and candidates:
-        from app.common.retriever import qdrant_menu_search
-        menu_ids = await qdrant_menu_search(menu_q, region=conditions.get("region"))
-        if menu_ids: candidates &= set(menu_ids)
-
-    # ── Step 3: 영업시간 필터 ──
-    if conditions.get("open_now") and candidates:
-        open_ids = await filter_open_now(list(candidates), current_time)
-        if open_ids: candidates = set(open_ids)
-
-    if not candidates:
-        return "조건에 맞는 식당을 찾기가 어렵네요. 다시 물어봐주시겠어요?"
-
-    # ── Step 4 & 5: 상세정보 조회 및 답변 생성 ──
-    details = await get_details(list(candidates)[:5])
-    return await generate_answer(user_message, details, history)
+            return await generate_answer(user_message, filtered_details, history)
+            
+        except Exception as e:
+            import logging
+            logging.error(f"Multiturn details error: {str(e)}")
+            return "식당 정보를 불러오는 중 오류가 발생했습니다."
+            
+    return "요청하신 식당을 찾을 수 없습니다."

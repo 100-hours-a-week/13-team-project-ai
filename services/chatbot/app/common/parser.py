@@ -1,12 +1,14 @@
 import re
 import json
 from app.core.config import settings
+from app.llm.vllm_client import chat
+from app.llm.prompts import get_condition_extraction_prompt
 
 # ──────────────────────────────────────────
 # 1. 상수 및 정규식 정의
 # ──────────────────────────────────────────
 
-# 서비스 지역 (retriever.py 등과 동기화 필요 시 여기서 중앙 관리도 가능)
+# 서비스 지역
 REGIONS = ["백현동", "수내동", "삼평동", "판교", "수내", "삼평", "백현", "분당"]
 
 # DB 카테고리 매핑
@@ -24,19 +26,20 @@ MENU_CATEGORY_MAP = {
 }
 
 # 지칭어 및 일반 단어 제외
-PRONOUNS = {"거기", "그곳", "이곳", "여기", "그게", "그집"}
+PRONOUNS = {"거기", "그곳", "이곳", "여기", "그게", "그집", "세곳", "세 곳", "모두", "전부", "둘 다", "셋 다"}
 FORBIDDEN_WORDS = {
-    "영업", "운영", "주차", "추천", "지금", "오늘", "내일", "있는", "가능한", "의", 
+    "영업", "운영", "주차", "추천", "지금", "오늘", "내일", "있는", "가기", "좋은", "의", 
     "맛집", "곳", "기능", "있어", "여부", "예약", "룸", "단체", "메뉴", "정보", 
-    "위치", "전화번호", "시간", "번호"
+    "위치", "전화번호", "시간", "번호", "한식당", "중식당", "일식당", "양식당", "고깃집", "고기집",
+    "모두", "전부", "세곳", "둘 다", "셋 다", "전체", "군데", "첫 번째", "두 번째", "세 번째", "첫번째", "두번째", "세번째", "가운데", "안내"
 }
 
 # 식당 이름 추출 패턴
-# 1. 지점명이 포함된 경우 (예: "연경 수내점")
 RESTAURANT_BRANCH_PATTERN = re.compile(
     r"([가-힣0-9a-zA-Z ]{1,15}(?:판교점|수내점|삼평점|백현점|분당점|본점|식당|레스토랑|바|카페))"
 )
-# 2. 상태/정보 키워드가 뒤따르는 경우 (예: "서현궁 영업중")
+# 키워드 앞에 나오는 명칭을 캡처하되, 키워드가 명칭의 일부로 흡수되는 것을 방지하기 위해 
+# 키워드 목록을 긴 것부터 배치하고, 캡처된 이름의 끝 부분을 사후 처리(strip)함.
 RESTAURANT_INFO_PATTERN = re.compile(
     r"([가-힣a-zA-Z0-9 ]{1,15})\s*(?:의\s*)?(?:운영시간|영업시간|영업중|영업여부|영업하나|영업|운영|오픈|문\s*열었|메뉴|정보|위치|전화번호|시간|번호|예약|룸|주차|단체)"
 )
@@ -69,16 +72,24 @@ def validate_conditions(raw: dict) -> dict:
         elif k == "capacity_min":
             result[k] = int(v) if v else None
         elif k == "name_query" and v:
-            result[k] = v.strip().strip("[]").strip()
+            if isinstance(v, str):
+                name = v.strip().strip("[]").strip()
+                # LLM이 추출한 이름에 대해서도 금지어 포함 여부 재검증
+                checked_names = extract_restaurant_names(name)
+                result[k] = checked_names[0] if checked_names else name
+                
+                # 재검증 후에도 마지막에 운영/영업 등이 붙어있는지 한 번 더 확인
+                for fw in ["운영", "영업", "시간", "정보"]:
+                    if result[k].endswith(fw):
+                        result[k] = result[k][:-len(fw)].strip()
+            else:
+                result[k] = None
         elif k == "category" and v:
             v_clean = v.replace(" ", "")
             result[k] = CAT_MAP.get(v_clean, v_clean)
-            if result[k] == "기타" and "카페" in v_clean and not result.get("menu_query"):
-                result["menu_query"] = "카페"
         else:
             result[k] = v if v else None
     return result
-
 
 def rule_based_parse(query: str) -> dict:
     """LLM 실패 시 또는 간단한 키워드 매칭을 위한 규칙 기반 파싱"""
@@ -88,86 +99,62 @@ def rule_based_parse(query: str) -> dict:
         "open_now": False, "menu_query": None, "name_query": None,
         "requested_count": None,
     }
-    
-    # 1. 특정 식당 이름 추출
     name_candidates = extract_restaurant_names(query)
     if name_candidates:
         result["name_query"] = name_candidates[0]
-
-    # 2. 지역 추출
     for r in REGIONS:
         if r in query:
             result["region"] = r
             break
-    
-    # 3. 인원
-    m = re.search(r"(\d+)\s*(명|인)", query)
-    if m:
-        result["capacity_min"] = int(m.group(1))
-    
-    # 4. 시설
     if "주차" in query: result["parking"] = True
-    if "룸"   in query: result["room"]    = True
-    if any(k in query for k in ["지금", "현재", "오픈", "영업중", "열었"]):
-        result["open_now"] = True
-    
-    # 5. 추천 갯수
-    count_match = re.search(r"(\d+)\s*(?:곳|군데|개|번)", query)
-    if count_match:
-        result["requested_count"] = int(count_match.group(1))
-    
-    # 6. 메뉴 및 카테고리
-    for menu, cat in MENU_CATEGORY_MAP.items():
-        if menu in query:
-            result["menu_query"] = menu
-            result["category"]   = cat
-            break
-            
-    if not result["category"]:
-        mapping = {
-            "고기": ["고기", "고기집"], "일식": ["일식", "일식당"],
-            "양식": ["양식", "양식당"], "중식": ["중식", "중식당"],
-            "분식": ["분식"], "해산물": ["해산물", "횟집"],
-            "한식": ["한식", "한식당"], "아시안": ["아시안"], "기타": ["카페"]
-        }
-        for cat, keywords in mapping.items():
-            if any(k in query for k in keywords):
-                result["category"] = cat
-                break
-                
+    if "룸" in query: result["room"] = True
     return result
 
-
 def extract_restaurant_names(query: str) -> list[str]:
-    """쿼리에서 식당 이름 후보 추출"""
+    """쿼리에서 모든 식당 이름 후보 추출"""
+    query = re.sub(r'[\r\n\t]+', ' ', query).strip()
     names = []
     
-    # 1. 지점명이 포함된 경우
-    m = RESTAURANT_BRANCH_PATTERN.search(query)
-    if m:
+    # 0.5. 추천 목록 패턴 (1. 식당명)
+    for m_list in re.finditer(r"\d\.\s*([가-힣a-zA-Z0-9 ]{1,15})(?:\s|\n|$)", query):
+        lname = m_list.group(1).strip()
+        if lname and lname not in names and lname not in FORBIDDEN_WORDS:
+            names.append(lname)
+
+    # 1. 지점명 포함
+    for m in RESTAURANT_BRANCH_PATTERN.finditer(query):
         candidate = m.group(1).strip()
-        if candidate not in PRONOUNS and not any(word in candidate for word in ["있는", "가능한", "좋은", "맛있는", "추천"]):
+        if candidate not in names and candidate not in PRONOUNS:
             names.append(candidate)
-            # 지점명 제거한 베이스 이름도 후보로 추가
-            base = re.sub(r"\s*(?:판교점|수내점|삼평점|백현점|분당점|본점|식당|레스토랑|바|카페)$", "", candidate).strip()
-            if base and base not in names and base not in PRONOUNS and base not in FORBIDDEN_WORDS:
-                names.append(base)
 
-    # 2. 상태/정보 키워드 패턴
-    m_info = RESTAURANT_INFO_PATTERN.search(query)
-    if m_info:
+    # 2. 정보 키워드 패턴 (greedy matching 방어 포함)
+    for m_info in RESTAURANT_INFO_PATTERN.finditer(query):
         raw_name = m_info.group(1).strip()
-        clean_name = raw_name
-        # 지역명 제거
-        for r in REGIONS:
-            clean_name = re.sub(rf"^{r}\s*", "", clean_name).strip()
-            
-        # 금칙어 제거
-        clean_name = re.sub(rf"\s*(?:{'|'.join(FORBIDDEN_WORDS)})$", "", clean_name).strip()
-        # 조사 제거
-        clean_name = re.sub(rf"(?:은|는|이|가|을|를)$", "", clean_name).strip()
+        
+        # [핵심 수정] 추출된 이름의 끝부분이 금지어(운영, 영업, 시간 등)에 포함되면 반복해서 제거
+        # 예: "스시 하루쿠 운영시간" -> "스시 하루쿠 운영" (Group 1) -> "스시 하루쿠" (Stripped)
+        temp_name = raw_name
+        while True:
+            parts = temp_name.split()
+            if not parts: break
+            if parts[-1] in FORBIDDEN_WORDS:
+                temp_name = " ".join(parts[:-1]).strip()
+            else:
+                break
+        raw_name = temp_name
+        
+        if raw_name and raw_name not in names and raw_name not in PRONOUNS:
+            names.append(raw_name)
 
-        if clean_name and clean_name not in PRONOUNS and clean_name not in names:
-            names.append(clean_name)
-            
     return names
+
+async def extract_accumulated_conditions(query: str, current_time: str, history: list) -> dict:
+    """LLM을 사용하여 대화 내역으로부터 누적 검색 조건 추출"""
+    prompt = get_condition_extraction_prompt(query, current_time, history)
+    try:
+        raw = await chat([{"role": "user", "content": prompt}], max_tokens=200)
+        cleaned = re.sub(r"```[a-z]*", "", raw).strip().strip("`").strip()
+        result = json.loads(cleaned)
+        return validate_conditions(result)
+    except Exception:
+        return rule_based_parse(query)

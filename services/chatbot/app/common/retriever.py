@@ -10,6 +10,49 @@ from app.core.config import settings
 import app.db.clients as clients
 from langsmith import traceable
 from langsmith.run_helpers import get_current_run_tree
+from sqlalchemy import text
+
+
+async def get_category_ids(category: str, region: str | None = None) -> list[int]:
+    """
+    PostgreSQL profile 테이블에서 카테고리 + 지역 기준 place_id 조회
+    """
+    region_clause = ""
+    params = {"category": category}
+    if region:
+        # 서비스 지역 내 키워드면 해당 키워드로 검색, 아니면 null 처리
+        clean_region = re.sub(r"역$", "", region).strip()
+        region_clause = "AND (road_address LIKE :region OR jibun_address LIKE :region)"
+        params["region"] = f"%{clean_region}%"
+    else:
+        # 지역 미지정 시 서비스 지역 전체에서 조회
+        clauses = []
+        for i, r in enumerate(_SERVICE_REGIONS):
+            key = f"r{i}"
+            clauses.append(f"road_address LIKE :{key} OR jibun_address LIKE :{key}")
+            params[key] = f"%{r}%"
+        region_clause = f"AND ({' OR '.join(clauses)})"
+
+    sql = text(f"""
+        SELECT id FROM restaurants
+        WHERE category_mapped = :category
+        {region_clause}
+    """)
+
+    async with clients.AsyncSessionLocal() as session:
+        result = await session.execute(sql, params)
+        return [row[0] for row in result.fetchall()]
+
+
+async def get_id_by_name(name: str) -> int | None:
+    """
+    PostgreSQL 에서 이름으로 식당 ID 1개 조회 (정확한 매칭 우선)
+    """
+    sql = text("SELECT id FROM restaurants WHERE name = :name LIMIT 1")
+    async with clients.AsyncSessionLocal() as session:
+        result = await session.execute(sql, {"name": name})
+        row = result.fetchone()
+        return row[0] if row else None
 
 
 # ──────────────────────────────────────────
@@ -93,6 +136,8 @@ async def qdrant_facility_filter(conditions: dict) -> list[int]:
 
     if conditions.get("region"):
         must.append(_region_filter(conditions["region"]))
+    else:
+        must.append(_default_region_filter())
 
     if conditions.get("parking"):
         must.append(
@@ -127,7 +172,7 @@ async def qdrant_facility_filter(conditions: dict) -> list[int]:
 
 
 @traceable(run_type="retriever", name="Qdrant Name Search")
-async def qdrant_name_search(name_query: str) -> list[int]:
+async def qdrant_name_search(name_query: str, region: str | None = None) -> list[int]:
     """
     profile doc 에서 식당 이름(name)으로 검색 → place_id 리스트 반환
     Full-Text MatchText 를 사용하여 '홍호아 판교점' 등을 검색
@@ -140,6 +185,11 @@ async def qdrant_name_search(name_query: str) -> list[int]:
 
     # 1. 원본 이름 + 접미사 제거 이름 둘 다 'name' 필드와 'text' 필드에서 검색
     must = [FieldCondition(key="doc_type", match=MatchValue(value="profile"))]
+    if region:
+        must.append(_region_filter(region))
+    else:
+        must.append(_default_region_filter())
+        
     should = [
         FieldCondition(key="name", match=MatchText(text=name_query)),
         FieldCondition(key="text", match=MatchText(text=name_query)),
@@ -196,6 +246,8 @@ async def qdrant_menu_search(
     must = [FieldCondition(key="doc_type", match=MatchValue(value="menu"))]
     if region:
         must.append(_region_filter(region))
+    else:
+        must.append(_default_region_filter())
     base_filter = Filter(must=must)
 
     try:

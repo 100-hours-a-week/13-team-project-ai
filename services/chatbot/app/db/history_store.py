@@ -1,10 +1,9 @@
-# app/db/sqlite.py
+# app/db/history_store.py
 import aiosqlite
 from app.core.config import settings
 
-
 async def init_db():
-    """앱 시작 시 1회 호출 — 테이블 생성"""
+    """앱 시작 시 1회 호출 — SQLite 테이블 및 인덱스 생성"""
     async with aiosqlite.connect(settings.SQLITE_DB_PATH) as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS conversations (
@@ -20,19 +19,11 @@ async def init_db():
             ON conversations(user_id, created_at)
         """)
         await db.commit()
-    print("✅ SQLite 초기화 완료")
+    print("SQLite 채팅 히스토리 초기화 완료")
 
 
 async def load_history(user_id: str) -> list[dict]:
-    """
-    user_id로 최근 대화 기록 로드
-
-    Args:
-        user_id: 로그인 유저 ID (백엔드에서 전달)
-
-    Returns:
-        list[dict]: [{"role": "user", "content": "..."}, ...]
-    """
+    """user_id로 최근 대화 기록 로드 (멀티턴 용)"""
     async with aiosqlite.connect(settings.SQLITE_DB_PATH) as db:
         async with db.execute("""
             SELECT role, content
@@ -43,24 +34,13 @@ async def load_history(user_id: str) -> list[dict]:
         """, (user_id, settings.HISTORY_LIMIT * 2)) as cursor:
             rows = await cursor.fetchall()
 
-    # DESC로 가져왔으니 시간 순으로 뒤집기
+    # 최근 것부터 가져왔으므로 순서 뒤집기 (시간순)
     rows.reverse()
     return [{"role": r[0], "content": r[1]} for r in rows]
 
 
-async def save_turn(
-    user_id: str,
-    user_message: str,
-    assistant_answer: str
-):
-    """
-    1턴 (user + assistant) 한 번에 저장
-
-    Args:
-        user_id:           로그인 유저 ID
-        user_message:      사용자 메시지
-        assistant_answer:  RAG 답변
-    """
+async def save_turn(user_id: str, user_message: str, assistant_answer: str):
+    """1턴 (user + assistant) 저장"""
     async with aiosqlite.connect(settings.SQLITE_DB_PATH) as db:
         await db.executemany("""
             INSERT INTO conversations (user_id, role, content)
@@ -73,14 +53,9 @@ async def save_turn(
 
 
 async def delete_history(user_id: str):
-    """
-    user_id 대화 기록 전체 삭제
-    (대화 초기화 기능 필요 시 사용)
-    """
+    """특정 유저의 대화 기록 전체 삭제"""
     async with aiosqlite.connect(settings.SQLITE_DB_PATH) as db:
-        await db.execute("""
-            DELETE FROM conversations WHERE user_id = ?
-        """, (user_id,))
+        await db.execute("DELETE FROM conversations WHERE user_id = ?", (user_id,))
         await db.commit()
 
 
@@ -89,20 +64,7 @@ async def load_history_cursor(
     limit: int = 20,
     before_id: int | None = None,
 ) -> dict:
-    """
-    커서 기반 대화 기록 조회 (프론트 무한스크롤용)
-
-    Args:
-        user_id:   유저 ID
-        limit:     한 번에 가져올 메시지 수 (기본 20)
-        before_id: 이 id보다 이전 메시지를 가져옴 (커서). None이면 최신부터.
-
-    Returns:
-        {
-            "messages": [{"id": int, "role": str, "content": str, "created_at": str}, ...],
-            "next_cursor": int | None  # 다음 페이지 요청 시 before_id로 사용. null이면 마지막 페이지.
-        }
-    """
+    """커서 기반 대화 기록 조회 (프론드용)"""
     async with aiosqlite.connect(settings.SQLITE_DB_PATH) as db:
         if before_id is not None:
             async with db.execute("""

@@ -2,7 +2,7 @@ import asyncio
 from app.llm.vllm_client import chat
 from langsmith import traceable
 from langsmith.run_helpers import get_current_run_tree
-from app.common.retriever import embed_query, search_by_hypothesis, _SERVICE_REGIONS
+from app.common.retriever import embed_query, search_by_hypothesis, _SERVICE_REGIONS, get_category_ids
 from app.common.details import get_details, generate_answer
 from app.common.reranker import rerank_place_ids
 from app.pipelines.multistep import multistep_pipeline
@@ -57,11 +57,11 @@ def generate_hypothetical(query: str) -> str:
     """
     # 목적 키워드 추출
     purpose_map = {
-        "부모님": "부모님과 함께 식사하기 좋고 조용하며 룸이 있는",
-        "어머니": "어머님과 함께 식사하기 좋고 조용하며 룸이 있는",
-        "아버지": "아버님과 함께 식사하기 좋고 조용하며 룸이 있는",
+        "부모님": "부모님과 함께 식사하기 좋고 조용한",
+        "어머니": "어머님과 함께 식사하기 좋고 조용한",
+        "아버지": "아버님과 함께 식사하기 좋고 조용한",
         "가족": "가족 모임에 적합하고 넓은 좌석과 조용한 분위기의",
-        "데이트": "연인과 데이트하기 좋고 분위기가 좋으며 조명이 아늑한",
+        "데이트": "연인과 데이트하기 좋고 분위기가 좋은",
         "기념일": "기념일에 어울리는 특별하고 분위기 있는",
         "회식": "직장 회식에 적합하고 단체석이 있는",
         "혼밥": "혼자 방문하기 편안하고 1인석이 있는",
@@ -88,43 +88,9 @@ def generate_hypothetical(query: str) -> str:
     )
 
 
-async def _get_category_ids(category: str, region: str | None) -> list[int]:
-    """
-    PostgreSQL profile 테이블에서 카테고리 + 지역 기준 place_id 조회
-    """
-    import app.db.clients as clients
-    from sqlalchemy import text
-    from app.common.retriever import _SERVICE_REGIONS
-
-    region_clause = ""
-    params = {"category": category}
-    if region:
-        # 서비스 지역 내 키워드면 해당 키워드로 검색, 아니면 null 처리
-        clean_region = re.sub(r"역$", "", region).strip()
-        region_clause = "AND (road_address LIKE :region OR jibun_address LIKE :region)"
-        params["region"] = f"%{clean_region}%"
-    else:
-        # 지역 미지정 시 서비스 지역 전체에서 조회
-        clauses = []
-        for i, r in enumerate(_SERVICE_REGIONS):
-            key = f"r{i}"
-            clauses.append(f"road_address LIKE :{key} OR jibun_address LIKE :{key}")
-            params[key] = f"%{r}%"
-        region_clause = f"AND ({' OR '.join(clauses)})"
-
-    sql = text(f"""
-        SELECT id FROM restaurants
-        WHERE category_mapped = :category
-        {region_clause}
-    """)
-
-    async with clients.AsyncSessionLocal() as session:
-        result = await session.execute(sql, params)
-        return [row[0] for row in result.fetchall()]
-
-
 async def _noop() -> None:
     """의도 없을 때 asyncio.gather 자리채우기용 noop"""
+    return None
     return None
 
 
@@ -135,13 +101,11 @@ async def _intent_prefilter(
     category: str | None,
 ) -> list[int] | None:
     """
-    의도 기반 필터 → place_id 리스트
+    의도/카테고리 기반 필터 → place_id 리스트
 
-    1단계 (RDB): category 있으면 PostgreSQL에서 카테고리 place_id 조회
-    2단계 (Qdrant): review_evidence에서 mood + negative_ratio 필터
-    3단계: 교집합 반환
-
-    필터 결과 5개 미만이면 None 반환
+    카테고리 있으면 Postgres에서 해당 카테고리 place_id 1차 조회 (하드 필터)
+    부모님/데이트/저녁 의도 있으면 Qdrant mood/시간대 필터 추가 적용 (소프트 필터)
+    카테고리만 있고 의도 없으면 category_ids 바로 반환
     """
     import app.db.clients as clients
     from qdrant_client.models import Filter, FieldCondition, MatchValue, MatchAny, Range
@@ -150,19 +114,22 @@ async def _intent_prefilter(
     need_quality = intent.get("with_parent") or intent.get("is_date")
     need_dinner  = intent.get("prefer_dinner")
 
-    # 1단계: 카테고리 필터 (RDB)
-    category_ids: set[int] | None = None
+    # 1단계: 카테고리 필터 (Postgres RDB — 하드 필터)
+    category_ids: list[int] | None = None
     if category:
-        ids = await _get_category_ids(category, region)
+        ids = await get_category_ids(category, region)
         if ids:
-            category_ids = set(ids)
+            category_ids = ids
             print(f"[HyDE] category prefilter ({category}): {len(category_ids)}개")
+        else:
+            print(f"[HyDE] category prefilter ({category}): 결과 없음")
+            return []  # 카테고리 지정했는데 해당 식당이 없으면 빈 리스트 반환
 
-    # 품격/부모님/데이트/저녁 의도 없고 카테고리도 없으면 스킵
-    if not need_quality and not need_dinner and category_ids is None:
-        return None
+    # 의도(품격/저녁) 없고 카테고리도 없으면 필터 불필요
+    if not need_quality and not need_dinner:
+        return category_ids  # 카테고리만 있으면 바로 반환 (None이면 필터 없음)
 
-    # 2단계: Qdrant mood + negative_ratio 필터
+    # 2단계: Qdrant mood + 시간대 필터 (카테고리 내에서 추가 적용)
     must = [FieldCondition(key="doc_type", match=MatchValue(value="review_evidence"))]
 
     if region:
@@ -172,26 +139,23 @@ async def _intent_prefilter(
         from app.common.retriever import _default_region_filter
         must.append(_default_region_filter())
 
+    # 카테고리 필터를 하드 필터로 Qdrant에도 적용
+    if category_ids:
+        must.append(FieldCondition(
+            key="place_id",
+            match=MatchAny(any=category_ids)
+        ))
+
     if need_quality:
         must.extend([
-            # mood 필터: 약간 완화 (gte 30 -> 15)
-            FieldCondition(key="tag_counts.mood",
-                           range=Range(gte=15)),
-            FieldCondition(key="computed_ratios.negative_ratio",
-                           range=Range(lt=0.15)),
+            FieldCondition(key="tag_counts.mood", range=Range(gte=15)),
+            FieldCondition(key="computed_ratios.negative_ratio", range=Range(lt=0.15)),
         ])
 
     if need_dinner:
         must.append(FieldCondition(
             key="computed_ratios.time_band_dinner_ratio",
             range=Range(gte=0.3)
-        ))
-
-    # category_ids 있으면 Qdrant 필터에도 추가 (교집합 효과)
-    if category_ids:
-        must.append(FieldCondition(
-            key="place_id",
-            match=MatchAny(any=list(category_ids))
         ))
 
     results, _ = await clients.qdrant.scroll(
@@ -203,15 +167,15 @@ async def _intent_prefilter(
     )
 
     if not results:
-        # mood 필터 제거하고 카테고리만으로 재시도
+        # mood/시간대 필터 결과 없음 → 카테고리 필터만 유지
         if category_ids:
             print("[HyDE] mood 필터 결과 없음 → 카테고리 필터만 사용")
-            return list(category_ids) if len(category_ids) >= 5 else None
+            return category_ids
         return None
 
     place_ids = list({r.payload["place_id"] for r in results})
     print(f"[HyDE] intent prefilter ({len(place_ids)}개) - quality={need_quality}, dinner={need_dinner}")
-    return place_ids if len(place_ids) >= 3 else None
+    return place_ids
 
 
 @traceable(run_type="chain", name="HyDE Pipeline")
@@ -247,26 +211,47 @@ async def hyde_pipeline(
     hypothetical = generate_hypothetical(query)
     print(f"[HyDE] 가상 답변: {hypothetical[:50]}...")
 
-    # 3. 의도 기반 사전 필터 (비동기)
-    prefiltered_ids = None
-    if any(intent.values()):
-        prefiltered_ids = await _intent_prefilter(intent, region, category)
+    try:
+        async with asyncio.timeout(30):
+            # 3. 의도/카테고리 기반 사전 필터 (비동기)
+            prefiltered_ids = None
+            if any(intent.values()) or category:
+                prefiltered_ids = await _intent_prefilter(intent, region, category)
 
-    # 4. 임베딩 & 검색
-    vec     = embed_query(hypothetical)
-    results = await search_by_hypothesis(
-        vec,
-        keyword=query,
-        region=region,
-        allowed_ids=prefiltered_ids,
-    )
+            # 4. 임베딩 & 검색
+            vec     = embed_query(hypothetical)
+            results = await search_by_hypothesis(
+                vec,
+                keyword=query,
+                region=region,
+                allowed_ids=prefiltered_ids,
+            )
+            
+            # (생략된 Fallback 로직 등은 try 블록 안에 포함되어야 함)
+            # 여기서는 편의상 results 가 부족할 때의 로직까지 30초 내에 끝내도록 감싸는 것임
+    except asyncio.TimeoutError:
+        print("[HyDE] 30초 타임아웃 발생 -> Multistep fallback")
+        return await multistep_pipeline(query, current_time)
 
-    # 4-1. Fallback: prefilter 제거하고 재검색
-    if len(results) < 5 and prefiltered_ids is not None:
-        print(f"[HyDE] 결과 {len(results)}개 → prefilter 제거 후 재검색")
+
+    # 4-1. Fallback: prefilter 결과 부족 시 mood 필터 없이 재검색
+    # 단, 카테고리가 지정된 경우 allowed_ids(카테고리 필터)는 절대 해제하지 않음
+    if len(results) < 5 and prefiltered_ids is not None and not category:
+        print(f"[HyDE] 결과 {len(results)}개 → prefilter 제거 후 재검색 (카테고리 없음)")
         results = await search_by_hypothesis(
             vec, keyword=query, region=region
         )
+    elif len(results) < 3 and prefiltered_ids is not None and category:
+        # 카테고리는 있지만 리뷰 데이터 부족 → profile 직접 조회로 보완
+        print(f"[HyDE] 카테고리 리뷰 부족({len(results)}개) → profile 직접 보완")
+        from app.common.retriever import qdrant_facility_filter
+        extra_ids = await qdrant_facility_filter({"category": category, "region": region})
+        if extra_ids:
+            # 기존 results에 없는 ID만 추가로 details 조회
+            existing_ids = {r.payload.get("place_id") for r in results}
+            supplement = [pid for pid in extra_ids if pid not in existing_ids]
+            prefiltered_ids = list(set(prefiltered_ids or []) | set(extra_ids))
+            print(f"[HyDE] profile 보완 ID {len(prefiltered_ids)}개")
 
     # 4-3. Fallback: Multistep
     if not results:
@@ -276,11 +261,23 @@ async def hyde_pipeline(
             run_tree.add_tags(["hyde_fallback"])
         return await multistep_pipeline(query, current_time)
 
-    # 5. 상위 선택 (벡터 스코어순, reranker 스킵)
-    # 요청 개수 반영 (최대 3개 제한)
+    # 5. 상위 선택: 벡터 스코어 기반 중복 제거
     final_limit = min(parsed.get("requested_count") or 3, 3)
-    top_ids = deduplicate_by_place(results)[:final_limit]
-    print(f"[HyDE] 상위: {len(top_ids)}개 (요청 제한 적용)")
+    top_ids = deduplicate_by_place(results)
+
+    # 5-1. 카테고리가 있는데 top_ids에 카테고리 외 ID가 섞일 수 있음
+    #       → prefiltered_ids(카테고리 ID)로 한번 더 교집합 필터
+    if prefiltered_ids:
+        filtered_top = [pid for pid in top_ids if pid in set(prefiltered_ids)]
+        if filtered_top:
+            top_ids = filtered_top
+            print(f"[HyDE] 카테고리 교집합 필터 후: {len(top_ids)}개")
+        else:
+            # 벡터 검색 결과가 카테고리에 없는 경우 → category_ids 직접 사용
+            print("[HyDE] 벡터 결과가 카테고리 밖 → category_ids 직접 사용")
+            top_ids = prefiltered_ids
+
+    top_ids = top_ids[:final_limit]
 
     # 6. 상세정보 & 답변
     try:

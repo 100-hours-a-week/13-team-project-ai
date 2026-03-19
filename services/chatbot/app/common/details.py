@@ -43,8 +43,12 @@ async def _fetch_one(place_id: int) -> dict | None:
     if not profile_r:
         return None
 
+    import logging
+    logger = logging.getLogger("app")
     p  = profile_r[0].payload
     ev = evidence_r[0].payload if evidence_r else {}
+    if hours_r:
+        logger.info(f"[DEBUG] Raw Hours Payload for {place_id}: {hours_r[0].payload.get('text')}")
     h_text = hours_r[0].payload.get("text", "정보 없음") if hours_r else "정보 없음"
 
     # menu doc text 필드에서 메뉴명 파싱 (대표 메뉴 우선순위 적용)
@@ -204,9 +208,10 @@ def _neg_to_phrase(keywords: list[str]) -> str:
     return ", ".join(phrases[:3]) + "가 있어요."
 
 
-def format_details(details: list[dict]) -> str:
+def format_details(details: list[dict], query: str = "") -> str:
     """
     상세정보 리스트 → vLLM 프롬프트 주입용 텍스트 (문서별 정보 구분)
+    query를 참고해 질문과 관련된 시설 정보만 출력한다.
     """
     if not details:
         return ""
@@ -218,41 +223,73 @@ def format_details(details: list[dict]) -> str:
         # profile 문서 기반 (편의시설, 기본 정보)
         facility = d.get("facility", {})
         f_info = []
-        if facility.get("parking", {}).get("available"):
-            f_info.append(f"주차: {facility['parking'].get('desc', '가능')}")
-        if facility.get("room", {}).get("available"):
-            f_info.append(f"룸: {facility['room'].get('desc', '가능')}")
-        if facility.get("reservation", {}).get("available"):
-            f_info.append(f"예약: {facility['reservation'].get('desc', '가능')}")
-        if facility.get("group", {}).get("available"):
-            f_info.append(f"단체석: {facility['group'].get('desc', '가능')}")
         
+        # ── 시설 정보: 질문과 관련 있는 항목만 출력 (불필요한 정보 제거) ──
+        # 어떤 속성을 묻는지 감지
+        want_parking     = any(k in (query or "") for k in ["주차"])
+        want_room        = any(k in (query or "") for k in ["룸", "프라이빗", "개인실"])
+        want_reservation = any(k in (query or "") for k in ["예약"])
+        want_group       = any(k in (query or "") for k in ["단체", "단체석", "회식"])
+        want_all         = not any([want_parking, want_room, want_reservation, want_group])
+
+        # 주차
+        if want_parking or want_all:
+            if facility.get("parking", {}).get("available"):
+                f_info.append(f"주차: {facility['parking'].get('desc', '가능')}")
+            else:
+                f_info.append("주차: 정보 없음/불가")
+
+        # 룸
+        if want_room or want_all:
+            if facility.get("room", {}).get("available"):
+                f_info.append(f"룸: {facility['room'].get('desc', '가능')}")
+            else:
+                f_info.append("룸: 정보 없음/불가")
+
+        # 예약
+        if want_reservation or want_all:
+            if facility.get("reservation", {}).get("available"):
+                f_info.append(f"예약: {facility['reservation'].get('desc', '가능')}")
+            else:
+                f_info.append("예약: 정보 없음/불가")
+
+        # 단체석
+        if want_group or want_all:
+            if facility.get("group", {}).get("available"):
+                f_info.append(f"단체석: {facility['group'].get('desc', '가능')}")
+            else:
+                f_info.append("단체석: 정보 없음/불가")
+        
+        # ── 주차/룸/운영시간 등 특정 속성 질문일 경우, 관련 없는 문서는 제거하여 토큰 절약 및 비교 정확성 향상 ──
+        # profile 문서 (시설 정보)
         block.append("[profile 문서]")
         block.append(f"카테고리: {d.get('category', '-')}")
         block.append(f"주소: {d.get('road_address', '-')}")
-        
-        # 편의시설 개별 항목으로 추가
         if f_info:
             for item in f_info:
                 block.append(f"- {item}")
-        else:
-            block.append("- 편의시설 정보 없음")
         
-        # menu 문서 기반
-        menu_names = d.get("menu_names", [])
-        block.append("\n[menu 문서]")
-        block.append(f"주요 메뉴: {', '.join(menu_names) if menu_names else '메뉴 정보 없음'}")
+        # menu 문서 (메뉴 정보는 메뉴 질문이거나 전체 정보 요청일 때만 포함)
+        want_menu = any(k in (query or "") for k in ["메뉴", "무슨"])
+        if want_menu or want_all:
+            menu_names = d.get("menu_names", [])
+            block.append("\n[menu 문서]")
+            block.append(f"주요 메뉴: {', '.join(menu_names) if menu_names else '메뉴 정보 없음'}")
         
-        # hours 문서 기반
-        block.append("\n[hours 문서]")
-        block.append(f"영업시간:\n{d.get('business_hours', '정보 없음')}")
+        # hours 문서 (영업시간 질문이거나 전체 정보 요청일 때만 포함)
+        want_hours = any(k in (query or "") for k in ["시간", "영업", "운영", "언제"])
+        if want_hours or want_all:
+            block.append("\n[hours 문서]")
+            block.append(f"영업시간:\n{d.get('business_hours', '정보 없음')}")
         
-        # review_evidence 문서 기반
-        derived = d.get("derived", [])
-        block.append("\n[review_evidence 문서]")
-        block.append(f"특징 요약: {', '.join(derived) if derived else '특징 정보 없음'}")
-        if d.get("negative_ratio") > 0:
-            block.append(f"부정 리뷰 비율: {d.get('negative_ratio')*100:.1f}%")
+        # review_evidence 문서 (분위기/특징 질문이거나 전체 정보 요청일 때만 포함)
+        want_review = any(k in (query or "") for k in ["분위기", "특징", "리뷰", "어때", "평가"])
+        if want_review or want_all:
+            derived = d.get("derived", [])
+            block.append("\n[review_evidence 문서]")
+            block.append(f"특징 요약: {', '.join(derived) if derived else '특징 정보 없음'}")
+            if d.get("negative_ratio") > 0:
+                block.append(f"부정 리뷰 비율: {d.get('negative_ratio')*100:.1f}%")
         
         lines.append("\n".join(block))
 
@@ -271,11 +308,11 @@ async def generate_answer(query: str, details: list[dict], history: list[dict] =
     from app.llm.prompts import get_answer_generation_messages
 
     if not details:
-        return "조건에 맞는 식당을 찾지 못했어요. 조건을 조금 완화해보세요."
+        return "요청하신 정보에 해당하는 식당이 없어요."
 
     # 최대 3개만 사용하도록 제한
     details = details[:3]
-    details_text = format_details(details)
+    details_text = format_details(details, query=query)
     
     # 히스토리 요약 구성 (있는 경우)
     history_summary = ""
@@ -284,5 +321,21 @@ async def generate_answer(query: str, details: list[dict], history: list[dict] =
             role_label = "질문" if h["role"] == "user" else "나의 이전 답변"
             history_summary += f"{role_label}: {h['content'][:150]}\n"
 
-    messages = get_answer_generation_messages(query, details_text, history_summary or None)
-    return await chat(messages, max_tokens=300)
+    messages = get_answer_generation_messages(query, details_text, history_summary or None,
+                                              details_count=len(details))
+    
+    # ── 질문 유형 및 정보량에 따른 가변 max_tokens 설정 ──
+    # 기본 300, 식당이 많거나 비교/메뉴 요청 시 증가
+    target_tokens = 300
+    if len(details) >= 3:
+        target_tokens = 600
+    elif any(kw in query for kw in ["비교", "차이", "메뉴", "다 알려줘", "리스트"]):
+        target_tokens = 500
+        
+    answer = await chat(messages, max_tokens=target_tokens)
+    
+    # LLM이 고집스럽게 이전 조건을 병합하여 말하는 경우 강제 치환 (예: "판교 일식당 중")
+    if history:
+        answer = re.sub(r'(?:[가-힣a-zA-Z\s]+(?:일식당|한식당|중식당|양식당|고깃집|고기집|횟집|가게|식당|곳))\s+중(?:에)?\s*', '추천 식당 중 ', answer)
+        
+    return answer

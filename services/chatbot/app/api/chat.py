@@ -8,7 +8,8 @@ from app.core.classifier import classify_query
 from app.pipelines.multistep import multistep_pipeline
 from app.pipelines.hyde import hyde_pipeline
 from app.pipelines.multiturn import multiturn_pipeline
-from app.db.sqlite import load_history, save_turn
+from app.db.history_store import load_history, save_turn
+from app.pipelines.graph import app_graph
 from app.core.config import settings
 
 import logging

@@ -23,7 +23,8 @@ async def init_clients():
     # Qdrant
     qdrant = AsyncQdrantClient(
         url=settings.QDRANT_URL,
-        api_key=settings.QDRANT_API_KEY if settings.QDRANT_API_KEY else None
+        api_key=settings.QDRANT_API_KEY if settings.QDRANT_API_KEY else None,
+        timeout=settings.QDRANT_TIMEOUT
     )
     print("✅ Qdrant 클라이언트 초기화")
 

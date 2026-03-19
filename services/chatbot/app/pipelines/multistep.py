@@ -3,7 +3,7 @@ import re
 import json
 from app.common.retriever import (
     qdrant_facility_filter, qdrant_name_search, qdrant_menu_search, 
-    filter_open_now, _SERVICE_REGIONS
+    filter_open_now, _SERVICE_REGIONS, get_category_ids, get_id_by_name
 )
 from app.common.reranker import rerank_place_ids
 from app.llm.vllm_client import chat
@@ -13,7 +13,7 @@ from langsmith import traceable
 # hyde.py 등에서 참조하는 허용 지역 목록
 ALLOWED_REGIONS = _SERVICE_REGIONS
 
-from app.common.parser import validate_conditions, rule_based_parse
+from app.common.parser import validate_conditions, rule_based_parse, RESTAURANT_INFO_PATTERN, FORBIDDEN_WORDS
 from app.llm.prompts import get_condition_extraction_prompt
 
 @traceable(run_type="chain", name="Extract Conditions (LLM)")
@@ -38,13 +38,17 @@ async def multistep_pipeline(query: str, current_time: str) -> str:
     # 1. 조건 추출
     conditions = await _extract_conditions_with_llm(query, current_time)
     
-    # [방어 로직] LLM이 이름을 놓쳤을 경우 규칙 기반으로 보완
-    if not conditions.get("name_query"):
-        rule_based = rule_based_parse(query)
-        if rule_based.get("name_query"):
-            conditions["name_query"] = rule_based["name_query"]
-            conditions["category"] = None
-            conditions["menu_query"] = None
+    # [방어 로직] LLM이 정보를 놓쳤을 경우 규칙 기반으로 보완
+    rule_based = rule_based_parse(query)
+    if not conditions.get("category") and rule_based.get("category"):
+        conditions["category"] = rule_based["category"]
+    if not conditions.get("name_query") and rule_based.get("name_query"):
+        conditions["name_query"] = rule_based["name_query"]
+
+    # [방어 로직] LLM이 카테고리를 이름으로 오인했을 경우 (e.g. "일식당")
+    if conditions.get("name_query") and conditions.get("category"):
+        if conditions["name_query"] in ["일식당", "고기집", "한식당", "중식당", "카페"]:
+            conditions["name_query"] = None
 
     # 지역 제한 체크
     region = conditions.get("region")
@@ -53,14 +57,38 @@ async def multistep_pipeline(query: str, current_time: str) -> str:
 
     # 2. 특정 식당 모드
     name_q = conditions.get("name_query")
+    is_specific = bool(RESTAURANT_INFO_PATTERN.search(query))
+    if name_q in FORBIDDEN_WORDS:
+        name_q = None
+
     if name_q:
-        place_ids = await qdrant_name_search(name_q)
+        place_ids = []
+        # 특정 정보 요청이면 Postgres 에서 정확한 ID 조회 시도
+        if is_specific:
+            exact_id = await get_id_by_name(name_q)
+            if exact_id:
+                place_ids = [exact_id]
+        
+        # 정확한 ID가 없으면 Qdrant 이름 검색 (퍼지 매칭)
+        if not place_ids:
+            place_ids = await qdrant_name_search(name_q)
+            if place_ids and is_specific:
+                place_ids = place_ids[:1]
+
         if place_ids:
-            details = await get_details(place_ids[:3])
-            return await generate_answer(query, details)
-        else:
-            if not any([conditions.get("category"), conditions.get("menu_query"), conditions.get("parking")]):
-                return f"죄송해요, '{name_q}'라는 식당은 저희 DB에 아직 등록되어 있지 않아요."
+
+            if conditions.get("category"):
+                cat_ids = await get_category_ids(conditions["category"], region)
+                if cat_ids:
+                    place_ids = [pid for pid in place_ids if pid in set(cat_ids)]
+            
+            if place_ids:
+                limit = 1 if is_specific else 3
+                details = await get_details(place_ids[:limit])
+                return await generate_answer(query, details)
+        
+        if not any([conditions.get("category"), conditions.get("menu_query"), conditions.get("parking")]):
+             return f"죄송해요, '{name_q}'라는 식당은 저희 DB에 아직 등록되어 있지 않아요."
 
     # 3. 추천 질문 모드
     facility_ids = await qdrant_facility_filter(conditions)
@@ -79,7 +107,7 @@ async def multistep_pipeline(query: str, current_time: str) -> str:
         return "조건에 맞는 식당을 찾기가 어렵네요. 조건을 조금 변경해서 다시 물어봐 주시셨어요?"
 
     # 4. 재정렬 및 최종 답변
-    top_ids = await _rerank_candidates(query, list(candidates)[:50])
+    top_ids = await _rerank_candidates(query, list(candidates)[:20])
     final_limit = min(conditions.get("requested_count") or 3, 3)
     details = await get_details(top_ids[:final_limit])
     

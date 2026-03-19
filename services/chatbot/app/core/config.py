@@ -5,7 +5,7 @@ class Settings(BaseSettings):
     
     DB_HOST: str = os.getenv("DB_HOST", "127.0.0.1")
     DB_USER: str = os.getenv("DB_USER", "appuser")
-    DB_PASSWORD: str = os.getenv("DB_PASSWORD", "freestyle13")
+    DB_PASSWORD: str = os.getenv("DB_PASSWORD", "2TcE8TdfZ7Eq25DX16Ef5VHu")
     DB_NAME: str = os.getenv("DB_NAME", "matchimban")
     DB_PORT: str = os.getenv("DB_PORT", "15432")
 
@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     QDRANT_URL: str = os.getenv("QDRANT_URL", "http://54.180.163.237:6333")
     QDRANT_API_KEY: str = os.getenv("QDRANT_API_KEY", "UbKF4wRjaqTqvNarEBP-8KXIcvt5BAy8bqkTFpg6iew")
     QDRANT_COLLECTION: str = os.getenv("QDRANT_COLLECTION", "restaurants_docs")
+    QDRANT_TIMEOUT: float = float(os.getenv("QDRANT_TIMEOUT", 10.0))
 
     # SQLite (Chat History)
     SQLITE_DB_PATH: str = "chat_history.db"
@@ -50,9 +51,7 @@ class Settings(BaseSettings):
         "RERANKER_MODEL_NAME", "BAAI/bge-reranker-v2-m3"
     )
 
-    @property
-    def DATABASE_URL(self) -> str:
-        return f"postgresql+asyncpg://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql+asyncpg://appuser:2TcE8TdfZ7Eq25DX16Ef5VHu@localhost:15432/matchimban")
 
     @property
     def DB_TYPE(self) -> str:

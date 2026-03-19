@@ -24,5 +24,5 @@ async def get_history(
     2. **더 보기** — 응답의 `next_cursor`를 `before_id`로 전달 → 이전 메시지 N개 반환
     3. **마지막 페이지** — `next_cursor`가 `null`이면 더 이상 이전 메시지 없음
     """
-    from app.db.sqlite import load_history_cursor
+    from app.db.history_store import load_history_cursor, delete_history
     return await load_history_cursor(user_id, limit=limit, before_id=before_id)

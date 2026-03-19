@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.chat import router as chat_router
 from app.api.history import router as history_router
 from app.db.clients import init_clients, close_clients
-from app.db.sqlite import init_db
+from app.db.history_store import init_db
 import app.db.clients as clients
 import logging
 
@@ -20,8 +20,8 @@ logger = logging.getLogger("app")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """앱 시작/종료 수명 주기 관리 (on_event deprecated 대체)"""
-    # startup
+    """앱 시작/종료 수명 주기 관리"""
+    # startup (SQLite 버전은 순서 상관 없음)
     await init_db()
     await init_clients()
     yield
