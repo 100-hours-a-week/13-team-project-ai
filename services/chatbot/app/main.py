@@ -2,6 +2,8 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_fastapi_instrumentator import Instrumentator
+from app.tracing import setup_tracing
 from app.api.chat import router as chat_router
 from app.api.history import router as history_router
 from app.db.clients import init_clients, close_clients
@@ -42,6 +44,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+setup_tracing(app)
+Instrumentator().instrument(app).expose(app)
 
 app.include_router(chat_router)
 app.include_router(history_router)

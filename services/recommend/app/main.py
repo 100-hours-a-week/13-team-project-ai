@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator
+from app.tracing import setup_tracing
 
 from app.core.config import settings
 from app.core.model_loader import load_model
@@ -64,6 +65,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+setup_tracing(app)
 Instrumentator().instrument(app).expose(app)
 
 
