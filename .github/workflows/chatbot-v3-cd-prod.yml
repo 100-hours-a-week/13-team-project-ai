@@ -21,10 +21,18 @@ env:
   ECR_REPOSITORY: moyeobab/chatbot
 
 jobs:
-  promote:
+  build-and-push:
     runs-on: ubuntu-24.04-arm
     environment: production
+    defaults:
+      run:
+        working-directory: services/chatbot
+    outputs:
+      image_tag: ${{ steps.set-tag.outputs.image_tag }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Set image tag (short SHA)
         id: set-tag
         run: echo "image_tag=sha-$(echo ${{ github.sha }} | cut -c1-8)" >> $GITHUB_OUTPUT
@@ -35,16 +43,70 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Verify image exists in ECR
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
         env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ steps.set-tag.outputs.image_tag }}
         run: |
-          if ! aws ecr describe-images --repository-name $ECR_REPOSITORY --image-ids imageTag=$IMAGE_TAG 2>/dev/null; then
-            echo "::error::Image $IMAGE_TAG not found in ECR. Dev에서 먼저 빌드해야 합니다."
-            exit 1
+          FULL_IMAGE=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          if aws ecr describe-images --repository-name $ECR_REPOSITORY --image-ids imageTag=$IMAGE_TAG 2>/dev/null; then
+            echo "Image $IMAGE_TAG already exists, skipping build"
+            exit 0
           fi
-          echo "Image $IMAGE_TAG verified in ECR"
+          docker build -t $FULL_IMAGE .
+          docker push $FULL_IMAGE
 
+      - name: Notify Discord
+        if: always()
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_CI }}
+          IMAGE_TAG: ${{ steps.set-tag.outputs.image_tag }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            TITLE="[PROD] Chatbot 이미지 빌드 성공"
+            DESC="이미지 빌드 및 ECR push 완료 (\`${IMAGE_TAG}\`)"
+            COLOR=3066993
+          else
+            TITLE="[PROD] Chatbot 이미지 빌드 실패"
+            DESC="빌드에 실패했습니다. 로그를 확인해주세요."
+            COLOR=15158332
+          fi
+
+          jq -n \
+            --arg title "$TITLE" \
+            --arg desc "$DESC" \
+            --arg color "$COLOR" \
+            --arg branch "${{ github.ref_name }}" \
+            --arg run_num "${{ github.run_number }}" \
+            --arg tag "$IMAGE_TAG" \
+            --arg url "$RUN_URL" \
+            '{
+              embeds: [{
+                title: $title,
+                description: $desc,
+                color: ($color | tonumber),
+                fields: [
+                  {name: "환경", value: "PROD", inline: true},
+                  {name: "브랜치", value: $branch, inline: true},
+                  {name: "이미지 태그", value: ("`" + $tag + "`"), inline: true},
+                  {name: "상세", value: ("[Actions 로그](" + $url + ")"), inline: false}
+                ],
+                footer: { text: "Chatbot V3 CI" }
+              }]
+            }' | curl -sf -X POST "$WEBHOOK" -H "Content-Type: application/json" -d @-
+
+  update-manifest:
+    needs: build-and-push
+    runs-on: ubuntu-24.04-arm
+    environment: production
+    env:
+      IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
+    steps:
       - name: Setup SSH and clone cloud repo
         run: |
           mkdir -p ~/.ssh
@@ -59,15 +121,11 @@ jobs:
           sudo mv kustomize /usr/local/bin/
 
       - name: Update prod image tag
-        env:
-          IMAGE_TAG: ${{ steps.set-tag.outputs.image_tag }}
         run: |
           cd cloud-repo/v3-kubernetes/k8s/overlays/prod/chatbot
           kustomize edit set image moyeobab/chatbot=$(grep -oP 'newName: \K.*moyeobab/chatbot' kustomization.yaml):$IMAGE_TAG
 
       - name: Commit and push
-        env:
-          IMAGE_TAG: ${{ steps.set-tag.outputs.image_tag }}
         run: |
           cd cloud-repo
           git config user.name "github-actions[bot]"
@@ -81,7 +139,6 @@ jobs:
         if: always()
         env:
           WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_CD }}
-          IMAGE_TAG: ${{ steps.set-tag.outputs.image_tag }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           if [ "${{ job.status }}" = "success" ]; then
@@ -90,7 +147,7 @@ jobs:
             COLOR=3066993
           else
             TITLE="[PROD] Chatbot 배포 실패"
-            DESC="이미지 검증 또는 매니페스트 업데이트 실패"
+            DESC="매니페스트 업데이트 실패"
             COLOR=15158332
           fi
 

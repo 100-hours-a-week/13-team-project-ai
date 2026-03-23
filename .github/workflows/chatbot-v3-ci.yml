@@ -2,7 +2,7 @@ name: AI Chatbot V3 CI Pipeline
 
 on:
   pull_request:
-    branches: [develop, main]
+    branches: [main]
     paths:
       - "services/chatbot/**"
       - ".github/workflows/chatbot-v3-*.yml"
