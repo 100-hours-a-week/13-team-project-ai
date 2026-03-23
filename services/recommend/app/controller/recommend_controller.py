@@ -145,8 +145,9 @@ def stage1_filter(item_df: pd.DataFrame,
         lk_v     = float(likes_raw.get(cat_name, 0.0))
         dk_v     = float(dislikes_raw.get(cat_name, 0.0))
 
-        if dk_v >= hard_dislike_thr and lk_v == 0:
-            continue
+        # [수정] 하드 필터링 제거: 비선호 표가 많더라도 후보군에는 일단 포함 (Tier 4로 차선책 활용)
+        # if dk_v >= hard_dislike_thr and lk_v == 0:
+        #     continue
         if excl_meat and cat_id == 7:
             continue
         if excl_bar and cat_id == 9:
