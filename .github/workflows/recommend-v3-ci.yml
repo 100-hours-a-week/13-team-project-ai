@@ -2,7 +2,7 @@ name: AI Recommend V3 CI Pipeline
 
 on:
   pull_request:
-    branches: [develop, main]
+    branches: [main]
     paths:
       - "services/recommend/**"
       - ".github/workflows/recommend-v3-*.yml"
