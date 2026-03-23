@@ -295,6 +295,11 @@ def predict(user_request: Dict, model, meta: Dict) -> pd.DataFrame:
     feat_idx         = {n: i for i, n in enumerate(feat_names)}
     n_feat           = len(feat_names)
     radius_expand    = meta.get('RADIUS_EXPAND',    1.5)
+    # [특수 케이스] 1~2인 모임인 경우 반경 확장을 2.0배로 상향
+    if head <= 2:
+        radius_expand = max(radius_expand, 2.0)
+        logger.info(f"[Relaxation] Headcount={head} -> radius_expand up to {radius_expand}")
+
     _                = meta.get('HARD_DISLIKE_THR', 2)
     tier_ratio       = meta.get('TIER_RATIO', TIER_RATIO_DEFAULT)
     pref_alpha       = meta.get('PREF_ALPHA', PREF_ALPHA)
@@ -435,6 +440,11 @@ def predict(user_request: Dict, model, meta: Dict) -> pd.DataFrame:
         t3_remaining = len(t_dfs[3][~t_dfs[3]['restaurant_id'].isin(used)])
         s1, s2, s3, s4 = _calc_slots(phase_n, t3_remaining)
 
+        # [특수 케이스] 1~2인 모임이거나 선호 카테고리가 매우 많을 때, Tier 1 비중 우대
+        if head <= 2 or len(likes_raw) >= 5:
+            s1 = phase_n
+            s2 = s3 = s4 = 0
+
         phase_picks = {}
         for t, slot in [(1, s1), (2, s2), (3, s3), (4, s4)]:
             phase_picks[t], used = _slot_fill_etc(t_dfs[t], slot, used)
@@ -443,7 +453,7 @@ def predict(user_request: Dict, model, meta: Dict) -> pd.DataFrame:
 
         if len(phase_df) < phase_n:
             supplement, used = _slot_fill_etc(
-                df_all[df_all['tier'] == 2],
+                df_all,
                 phase_n - len(phase_df), used,
             )
             phase_df = pd.concat([phase_df, supplement], ignore_index=True)
