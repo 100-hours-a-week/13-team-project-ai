@@ -3,7 +3,7 @@ run-name: AI Recommend V3 CD Prod • ${{ github.event.head_commit.message }}
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
     paths:
       - "services/recommend/**"
       - ".github/workflows/recommend-v3-*.yml"

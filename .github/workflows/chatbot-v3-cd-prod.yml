@@ -3,7 +3,7 @@ run-name: AI Chatbot V3 CD Prod • ${{ github.event.head_commit.message }}
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
     paths:
       - "services/chatbot/**"
       - ".github/workflows/chatbot-v3-*.yml"
